@@ -53,6 +53,15 @@ export class ProductionStore {
     validateSession(session);
     return (requestId?this.db.prepare('SELECT json FROM productions WHERE session_id=? AND request_id=?').all(session,requestId):this.db.prepare('SELECT json FROM productions WHERE session_id=? ORDER BY rowid DESC LIMIT 50').all(session)).map(row=>JSON.parse(row.json));
   }
+  findRenderByRequest(id,session,requestId) {
+    const production=this.get(id,session);
+    if(typeof requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(requestId))throw new ApiError(400,'生成要求IDが不正です。');
+    const row=this.db.prepare('SELECT json FROM runs WHERE request_id=?').get(requestId);
+    if(!row)throw new ApiError(404,'生成要求を確認できません。未存在は送信失敗の証明ではありません。');
+    const run=JSON.parse(row.json);
+    if(run.requestId!==requestId||run.sessionId!==session||run.productionId!==id||typeof run.id!=='string'||!Array.isArray(production.attempts)||!production.attempts.includes(run.id))throw new ApiError(404,'この会話の制作に属する生成要求を確認できません。');
+    return {run,production};
+  }
   listAll() {
     return this.db.prepare('SELECT json FROM productions ORDER BY rowid DESC LIMIT 50').all().map(row=>{
       const p=JSON.parse(row.json);

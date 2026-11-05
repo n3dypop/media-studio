@@ -3,6 +3,9 @@
 export class GateError extends Error {
   constructor(message,code='GPU_GATE_BLOCKED') { super(message);this.status=503;this.code=code; }
 }
+// Only stableResources can mark a deadline reached after a valid low sample.
+// An observer error with a matching public code is not resource evidence.
+const observedShortage=Symbol('observed-resource-shortage');
 const aborted=signal=>signal?.throwIfAborted();
 const wait=(ms,signal)=>new Promise((resolve,reject)=>{
   aborted(signal);
@@ -33,10 +36,11 @@ class Mutex {
 }
 
 export class ResourceGate {
-  constructor({strata,observeResources,onState=async()=>{},beforeCoreLoad=async()=>{},minFreeBytes=8*1024**3,minCoreFreeBytes=minFreeBytes,minRamAvailableBytes=0,minCommitAvailableBytes=0,stableSamples=2,intervalMs=500,drainTimeoutMs=60000,resourceTimeoutMs=45000}) {
+  constructor({strata,observeResources,onState=async()=>{},beforeCoreLoad=null,minFreeBytes=8*1024**3,minCoreFreeBytes=minFreeBytes,minRamAvailableBytes=0,minCommitAvailableBytes=0,stableSamples=2,intervalMs=500,drainTimeoutMs=60000,resourceTimeoutMs=45000}) {
     if(!strata||typeof observeResources!=='function'||typeof onState!=='function')throw new TypeError('Strata, resource observation, and state callback are required');
+    if(beforeCoreLoad!==null&&typeof beforeCoreLoad!=='function')throw new TypeError('Core load preflight must be a function');
     for(const [key,value]of Object.entries({minFreeBytes,minCoreFreeBytes,minRamAvailableBytes,minCommitAvailableBytes,stableSamples,intervalMs,drainTimeoutMs,resourceTimeoutMs}))if(!Number.isSafeInteger(value)||value<0||(['stableSamples','intervalMs','drainTimeoutMs','resourceTimeoutMs'].includes(key)&&value<1))throw new TypeError('Invalid gate limit: '+key);
-    Object.assign(this,{strata,observeResources,onState,beforeCoreLoad,minFreeBytes,minCoreFreeBytes,minRamAvailableBytes,minCommitAvailableBytes,stableSamples,intervalMs,drainTimeoutMs,resourceTimeoutMs});
+    Object.assign(this,{strata,observeResources,onState,beforeCoreLoad:beforeCoreLoad??(async()=>{}),hasCoreLoadPreflight:beforeCoreLoad!==null,minFreeBytes,minCoreFreeBytes,minRamAvailableBytes,minCommitAvailableBytes,stableSamples,intervalMs,drainTimeoutMs,resourceTimeoutMs});
     this.owner='unknown';this.activeCore=0;this.blocked=true;this.generationRunId=null;this.error=null;this.initialized=false;this.strataStarted=null;this.resources=null;
     this.mutex=new Mutex();this.changed=new Set();this.publications=Promise.resolve();
   }
@@ -102,7 +106,7 @@ export class ResourceGate {
       this.resources.observedAt=typeof sample.observedAt==='string'?sample.observedAt:new Date().toISOString();
       count=sample.freeBytes>=minimum&&(minRamAvailableBytes===0||sample.ramAvailableBytes>=minRamAvailableBytes)&&(minCommitAvailableBytes===0||sample.commitAvailableBytes>=minCommitAvailableBytes)?count+1:0;
       if(count>=this.stableSamples)return this.resources;
-      if(Date.now()>=deadline)throw new GateError('モデル交代に必要なRAM・VRAMの余裕を確認できません。','RESOURCES_BUSY');
+      if(Date.now()>=deadline){const error=new GateError('モデル交代に必要なRAM・VRAMの余裕を確認できません。','RESOURCES_BUSY');error[observedShortage]=true;throw error;}
       await wait(Math.min(this.intervalMs,Math.max(1,deadline-Date.now())),signal);
     }
   }
@@ -118,14 +122,31 @@ export class ResourceGate {
           if(this.blocked||!['core','none'].includes(this.owner))throw new GateError(this.error||'GPU使用権の確認待ちです。');
           if(this.owner==='none'){
             this.owner='loading_core';this.blocked=true;await this.publish();
+            let refusedBeforeLoad=false;
             try{
-              await this.stableResources(this.minCoreFreeBytes,signal);
+              try{await this.stableResources(this.minCoreFreeBytes,signal);}
+              catch(error){
+                // A positive shortage is the only automatically recoverable
+                // failure here. No lifecycle request has been sent by this
+                // admission. Recheck external Comfy ownership and the same
+                // Strata epoch before durably reopening the idle gate.
+                if(error?.code!=='RESOURCES_BUSY'||error[observedShortage]!==true||signal?.aborted||!this.hasCoreLoadPreflight)throw error;
+                const cleanupSignal=AbortSignal.timeout(10000);
+                await abortable(Promise.resolve().then(()=>this.beforeCoreLoad({signal:cleanupSignal})),cleanupSignal);
+                const observed=await abortable(this.state({signal:cleanupSignal}),cleanupSignal);
+                if(observed.loaded||observed.activity.in_flight!==0||this.owner!=='loading_core'||this.generationRunId!==null||this.activeCore!==0)
+                  throw new GateError('資源不足の確認中にGPUまたは中核の状態が変わりました。');
+                this.owner='none';this.blocked=false;this.error=null;
+                await this.publish();
+                refusedBeforeLoad=true;
+                throw error;
+              }
               await this.beforeCoreLoad({signal});
               const before=await this.state({signal});if(before.loaded||before.activity.in_flight!==0)throw new GateError('中核の状態が受付前に変わりました。');
               await this.strata.load({signal});const current=await this.state({signal});this.readyCore(current);
               if(current.activity.in_flight!==0)throw new GateError('中核に管理外の推論があります。');
               this.owner='core';this.blocked=false;this.error=null;
-            }catch(error){await this.block(error);throw error;}
+            }catch(error){if(!refusedBeforeLoad)await this.block(error);throw error;}
           }else{
             try{this.readyCore(await this.state({signal}));}
             catch(error){await this.block(error);throw error;}

@@ -1,6 +1,7 @@
 import {ApiError} from './store.mjs';
 import {validateSession} from './productions.mjs';
 import {assertActiveProfile,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS} from './media-modes.mjs';
+import {isDeepStrictEqual} from 'node:util';
 
 export async function productionRoute({req,res,path,url,role,store,engine,productions,workflows,mossPe,qwenPe,body,json,abortSession=()=>{},cancelProductionPe=()=>{},validateStopTurn=()=>{}}) {
   if(!productions||!workflows) return false;
@@ -41,11 +42,22 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
     const production=productions.bindWorkflow(p.id,session,input.expectedRevision,workflow,adoption);
     json(res,201,{workflow,production,validation:{valid:true}});return true;
   }
-  const match=path.match(/^\/api\/productions\/([a-f0-9-]{36})(?:\/(render|render-prepared|evaluate|iteration|feedback|cancel|cancel-owned|user-decision|planning-delivery|latest-completed))?$/);
+  const match=path.match(/^\/api\/productions\/([a-f0-9-]{36})(?:\/(render|render-prepared|evaluate|iteration|feedback|cancel|cancel-owned|user-decision|planning-delivery|latest-completed|run-by-request))?$/);
   if(!match) throw new ApiError(404,'制作APIがありません。');
   const [,id,action]=match;
   const production=productions.get(id,session);
   if(!action&&req.method==='GET') {json(res,200,{production});return true;}
+  if(action==='run-by-request'&&req.method==='GET') {
+    if([...url.searchParams.keys()].some(key=>key!=='requestId')||url.searchParams.getAll('requestId').length!==1)throw new ApiError(400,'生成要求IDを一つ指定してください。');
+    const result=productions.findRenderByRequest(id,session,url.searchParams.get('requestId'));
+    let saved;
+    try {
+      if(typeof result.run?.spec?.workflow?.id!=='string')throw Error('Missing workflow identity');
+      saved=await workflows.get(result.run.spec.workflow.id);
+      if(!saved||saved.productionId!==id||!isDeepStrictEqual(saved,result.run.spec.workflow))throw Error('Saved workflow differs');
+    } catch { throw new ApiError(409,'保存済みworkflowと生成時の条件が一致することを確認できません。送信結果は未解決です。'); }
+    json(res,200,result);return true;
+  }
   if(action==='latest-completed'&&req.method==='GET') {json(res,200,productions.latestCompletedRun(id,session));return true;}
   if(action==='render'&&req.method==='POST') {
     assertActiveProfile(production.brief.modelProfile);

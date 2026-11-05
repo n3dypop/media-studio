@@ -10,8 +10,15 @@ const finite=(value,min,max)=>typeof value==='number'&&Number.isFinite(value)&&v
 // SHA-256-verified each downloaded image. Never return prompt, graph or paths.
 export function executionEvidence(run,verifiedImages){
   if(!run||!run.spec||!hex(run.specHash)||!Array.isArray(verifiedImages)||verifiedImages.length===0)return null;
-  try{if(digest(run.spec)!==run.specHash)return null;}catch{return null;}
-  const spec=run.spec,submitted={source:'controller-stored-spec',specSha256:run.specHash,note:'Requested settings saved before execution; they are not measurements of the GPU execution.'};
+  // Integrated prompt enhancement preserves the original request in spec and
+  // stores the actual submitted settings in effectiveSpec. If an effective
+  // spec is present, never fall back to the original on a malformed value or
+  // hash mismatch: that would attribute an image to the wrong settings.
+  const effective=Object.hasOwn(run,'effectiveSpec');
+  const spec=effective?run.effectiveSpec:run.spec;
+  if(!spec||typeof spec!=='object'||Array.isArray(spec))return null;
+  try{if(digest(spec)!==run.specHash)return null;}catch{return null;}
+  const submitted={source:effective?'controller-stored-effective-spec':'controller-stored-spec',specSha256:run.specHash,note:effective?'Effective settings saved before execution after prompt enhancement; they are not measurements of the GPU execution.':'Requested settings saved before execution; they are not measurements of the GPU execution.'};
   if(safeText(spec.modelProfile))submitted.modelProfile=spec.modelProfile;
   if(safeText(spec.mode))submitted.mode=spec.mode;
   if(typeof spec.seed==='string'&&/^(0|[1-9]\d{0,15})$/.test(spec.seed)&&BigInt(spec.seed)<=BigInt(Number.MAX_SAFE_INTEGER))submitted.seed=spec.seed;
