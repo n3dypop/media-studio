@@ -545,7 +545,8 @@ export class WorkflowRegistry {
     validationScope: 'Static installed-schema, model, topology and bounds checks; edited graph performance and image quality are not certified.' };
   }
 
-  async saveDraft({ productionId, graph, modelProfile = this.profileId, rationale,mode='t2i',inputAssetId=null,sessionId=null,official,inputRoles,inputAssetIds,briefInputIds } = {}) {
+  async saveDraft({ productionId, graph, modelProfile = this.profileId, rationale,mode='t2i',inputAssetId=null,sessionId=null,official,inputRoles,inputAssetIds,briefInputIds,beforeWrite=async()=>{} } = {}) {
+    if(typeof beforeWrite!=='function')throw new TypeError('Workflow admission callback must be a function');
     if (typeof productionId !== 'string' || !UUID.test(productionId)) throw new Error('productionId must be a canonical UUID');
     assertActiveProfile(modelProfile);
     const selected=this.profile(modelProfile);
@@ -563,6 +564,7 @@ export class WorkflowRegistry {
       const objects=await this.installed();let checked;try{checked=validateQwen21Graph(built.graph,{options,objects});}catch(error){const rejected=new Error(`Qwen workflow schema validation failed: ${error.message}`);rejected.status=400;throw rejected;}
       const snapshot={schemaVersion:5,id:randomUUID(),productionId,createdAt:new Date().toISOString(),rationale:rationale.trim(),modelProfile,mode,inputAssetIds:inputs.map(x=>x.id),request:options,graph:checked.graph,output:checked.output,sha256:workflowGraphHash(checked.graph),negativePromptEffective:checked.negativePromptEffective,validation:{kind:'static',runtimeTested:false}};
       const bytes=JSON.stringify(snapshot,null,2)+'\n';if(Buffer.byteLength(bytes)>MAX_DRAFT_BYTES)throw new Error('Draft size limit exceeded');
+      await beforeWrite(snapshot);
       const directory=await safeDirectory(this.directory,true),target=path.join(directory,`${snapshot.id}.json`),temporary=path.join(directory,`${snapshot.id}.${randomUUID()}.partial`),handle=await open(temporary,'wx',0o600);
       try{await handle.writeFile(bytes,'utf8');await handle.sync();}finally{await handle.close();}
       try{try{await lstat(target);throw new Error('Draft identity already exists');}catch(error){if(error.code!=='ENOENT')throw error;}await rename(temporary,target);}catch(error){await unlink(temporary).catch(()=>{});throw error;}
@@ -577,6 +579,7 @@ export class WorkflowRegistry {
       if(!inspection.ready){const rejected=new Error(`Workflow schema validation failed: ${JSON.stringify(inspection)}`);rejected.status=400;throw rejected;}
       const snapshot={schemaVersion:4,id:randomUUID(),productionId,createdAt:new Date().toISOString(),rationale:rationale.trim(),modelProfile,mode,inputAssetIds:inputAssets.map(item=>item.binding.id),request,graph:checked.graph,output:checked.output,sha256:workflowGraphHash(checked.graph),validation:{kind:'static',runtimeTested:false}};
       const bytes=JSON.stringify(snapshot,null,2)+'\n';if(Buffer.byteLength(bytes)>MAX_DRAFT_BYTES)throw new Error('Draft size limit exceeded');
+      await beforeWrite(snapshot);
       const directory=await safeDirectory(this.directory,true),target=path.join(directory,`${snapshot.id}.json`),temporary=path.join(directory,`${snapshot.id}.${randomUUID()}.partial`),handle=await open(temporary,'wx',0o600);
       try{await handle.writeFile(bytes,'utf8');await handle.sync();}finally{await handle.close();}
       try{try{await lstat(target);throw new Error('Draft identity already exists');}catch(error){if(error.code!=='ENOENT')throw error;}await rename(temporary,target);}catch(error){await unlink(temporary).catch(()=>{});throw error;}
@@ -600,6 +603,7 @@ export class WorkflowRegistry {
         installedSchemaSha256: hashJson(Object.fromEntries(selected.types.filter(type => objects[type]).map(type => [type, objects[type]]))) } };
     const bytes = JSON.stringify(snapshot, null, 2) + '\n';
     if (Buffer.byteLength(bytes) > MAX_DRAFT_BYTES) throw new Error('Draft size limit exceeded');
+    await beforeWrite(snapshot);
     const directory = await safeDirectory(this.directory, true);
     const target = path.join(directory, `${snapshot.id}.json`);
     const temporary = path.join(directory, `${snapshot.id}.${randomUUID()}.partial`);

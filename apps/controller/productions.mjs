@@ -6,6 +6,8 @@ import {mediaIntent,assertModeProfile,assertActiveProfile,MOSS_OFFICIAL_IDS,QWEN
 const officialInputProfile=id=>[...MOSS_OFFICIAL_IDS,...QWEN21_OFFICIAL_IDS].includes(id);
 
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+const definiteWorkflowRejection=Symbol('workflow-preparation-rejected-before-write');
+export const isDefiniteWorkflowRejection=error=>error?.[definiteWorkflowRejection]===true;
 const text=(value,max,label)=>{
   if(typeof value!=='string'||!value.trim()||value.length>max) throw new ApiError(400,`${label}が不正です。`);
   return value.trim();
@@ -36,6 +38,7 @@ export class ProductionStore {
     this.assets=assets;
     this.db.exec(`CREATE TABLE IF NOT EXISTS productions(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,request_id TEXT NOT NULL,payload_hash TEXT NOT NULL,json TEXT NOT NULL,UNIQUE(session_id,request_id));
       CREATE TABLE IF NOT EXISTS evaluations(id TEXT PRIMARY KEY,production_id TEXT NOT NULL,run_id TEXT UNIQUE NOT NULL,json TEXT NOT NULL);`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS workflow_preparations(session_id TEXT NOT NULL,request_id TEXT NOT NULL,production_id TEXT NOT NULL,payload_hash TEXT NOT NULL,expected_revision INTEGER NOT NULL,state TEXT NOT NULL,workflow_id TEXT,workflow_hash TEXT,snapshot_hash TEXT,PRIMARY KEY(session_id,request_id));`);
   }
   get(id,session) {
     const row=this.db.prepare('SELECT session_id,json FROM productions WHERE id=?').get(id);
@@ -115,10 +118,12 @@ export class ProductionStore {
     this.store.event(production.id,type,{revision:production.revision,...data});
     return production;
   }
-  check(production,revision) {
+  check(production,revision,{allowedPreparation=null}={}) {
     if(production.cancelRequested) throw new ApiError(409,'この制作は停止済みです。');
     if(production.phase==='completed') throw new ApiError(409,'この制作は完了しています。新しい要望は別の制作で開始してください。');
     if(production.revision!==revision) throw new ApiError(409,'制作記録が更新されています。読み直してください。');
+    const pending=this.db.prepare("SELECT request_id FROM workflow_preparations WHERE session_id=? AND state='started' LIMIT 1").get(production.sessionId);
+    if(pending&&pending.request_id!==allowedPreparation)throw new ApiError(409,'workflow要求の結果が未確認です。制作変更を保留してください。');
   }
   create(session,input) {
     validateSession(session);
@@ -129,6 +134,7 @@ export class ProductionStore {
     return this.store.transaction(()=>{
       const existing=this.db.prepare('SELECT json,payload_hash FROM productions WHERE session_id=? AND request_id=?').get(session,requestId);
       if(existing) {if(existing.payload_hash!==hash) throw new ApiError(409,'同じrequestIdの依頼内容を変更できません。');return {production:JSON.parse(existing.json),created:false};}
+      if(this.db.prepare("SELECT request_id FROM workflow_preparations WHERE session_id=? AND state='started' LIMIT 1").get(session))throw new ApiError(409,'この会話のworkflow要求は結果未確認です。新しい制作を開始せず照合してください。');
       assertActiveProfile(brief.modelProfile);
       const now=new Date().toISOString();
       const production={id:randomUUID(),sessionId:session,requestId,brief,briefHash:hash,revision:0,phase:'planning',cancelRequested:false,workflowId:null,latestRunId:null,bestRunId:null,iterationPlans:[],attempts:[],evaluations:[],createdAt:now,updatedAt:now};
@@ -137,14 +143,43 @@ export class ProductionStore {
       return {production,created:true};
     });
   }
-  bindWorkflow(id,session,revision,workflow,mossPeAdoption=null) {
+  beginWorkflowPreparation(id,session,input) {
+    const requestId=input?.requestId;
+    if(typeof requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(requestId)){const error=new ApiError(400,'workflow要求IDが不正です。');error[definiteWorkflowRejection]=true;throw error;}
+    const payloadHash=digest(input);
     return this.store.transaction(()=>{
-      const p=this.get(id,session);this.check(p,revision);
+      try {
+        const p=this.get(id,session);this.check(p,input.expectedRevision);
+      if(this.db.prepare("SELECT request_id FROM workflow_preparations WHERE session_id=? AND state='started' LIMIT 1").get(session))throw new ApiError(409,'この会話のworkflow要求は結果未確認です。再送せず照合してください。');
+        if(this.db.prepare('SELECT request_id FROM workflow_preparations WHERE session_id=? AND request_id=?').get(session,requestId))throw new ApiError(409,'このworkflow要求は受付済みまたは結果未確認です。再送せず照合してください。');
+      } catch(error) {if(error instanceof ApiError&&error.status>=400&&error.status<500)error[definiteWorkflowRejection]=true;throw error;}
+      this.db.prepare('INSERT INTO workflow_preparations(session_id,request_id,production_id,payload_hash,expected_revision,state) VALUES (?,?,?,?,?,?)').run(session,requestId,id,payloadHash,input.expectedRevision,'started');
+      return {requestId,payloadHash};
+    });
+  }
+  assertNoPendingWorkflow(id,session=null) {
+    const pending=session===null?this.db.prepare("SELECT request_id FROM workflow_preparations WHERE production_id=? AND state='started' LIMIT 1").get(id):this.db.prepare("SELECT request_id FROM workflow_preparations WHERE session_id=? AND state='started' LIMIT 1").get(session);
+    if(pending)throw new ApiError(409,'workflow要求の結果が未確認です。再送や制作変更を行わず照合してください。');
+  }
+  findWorkflowPreparation(id,session,requestId) {
+    const p=this.get(id,session);
+    if(typeof requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(requestId))throw new ApiError(400,'workflow要求IDが不正です。');
+    const r=this.db.prepare('SELECT * FROM workflow_preparations WHERE session_id=? AND request_id=?').get(session,requestId);
+    if(!r||r.production_id!==id||r.state!=='committed'||p.workflowId!==r.workflow_id||p.workflowSha256!==r.workflow_hash||p.revision!==r.expected_revision+1)throw new ApiError(409,'workflow要求の結果を確認できません。再送せず保留してください。');
+    return {production:p,receipt:{requestId:r.request_id,productionId:r.production_id,payloadHash:r.payload_hash,expectedRevision:r.expected_revision,workflowId:r.workflow_id,workflowHash:r.workflow_hash,snapshotHash:r.snapshot_hash}};
+  }
+  bindWorkflow(id,session,revision,workflow,mossPeAdoption=null,preparation=null) {
+    return this.store.transaction(()=>{
+      const p=this.get(id,session);this.check(p,revision,{allowedPreparation:preparation?.requestId??null});
       if(workflow.modelProfile!==(p.brief.modelProfile??'qwen-photo-v1'))throw new ApiError(409,'指定モデルを別モデルへ変更できません。新しい制作で指定してください。');
       if((workflow.mode??'t2i')!==(p.brief.mode??'t2i')||(officialInputProfile(workflow.modelProfile)?JSON.stringify(workflow.inputAssetIds)!==JSON.stringify(p.brief.inputAssetIds??(p.brief.inputAssetId?[p.brief.inputAssetId]:[])):(workflow.inputAsset?.id??null)!==(p.brief.inputAssetId??null)))throw new ApiError(409,'workflowのモードまたは入力画像が制作と一致しません。');
       if(p.latestRunId&&!this.failedWithoutImage(p)&&!this.mayRevise(p)) throw new ApiError(409,'直前の画像を評価するか利用者の追加指示を記録してから次の変更を作成してください。');
       if(mossPeAdoption!==null&&(!mossPeAdoption||!['moss','qwen'].includes(mossPeAdoption.family)||mossPeAdoption.workflowId!==workflow.id||mossPeAdoption.workflowSha256!==workflow.sha256||mossPeAdoption.briefHash!==p.briefHash))throw new ApiError(409,'PE adoption and workflow do not match');
       p.workflowId=workflow.id;p.workflowSha256=workflow.sha256;p.workflowEnhancement=mossPeAdoption;p.revision++;p.phase='ready';
+      if(preparation){
+        const result=this.db.prepare("UPDATE workflow_preparations SET state='committed',workflow_id=?,workflow_hash=?,snapshot_hash=? WHERE session_id=? AND request_id=? AND production_id=? AND expected_revision=? AND payload_hash=? AND state='started'").run(workflow.id,workflow.sha256,digest(workflow),session,preparation.requestId,id,revision,preparation.payloadHash);
+        if(result.changes!==1)throw new ApiError(409,'workflow要求の受付記録を確認できません。');
+      }
       return this.write(p,'workflow_selected',{workflowId:workflow.id,sha256:workflow.sha256,rationale:workflow.rationale,...(mossPeAdoption?{mossPeAdoption}:{})});
     });
   }

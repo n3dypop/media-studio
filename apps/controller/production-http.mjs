@@ -1,7 +1,8 @@
-import {ApiError} from './store.mjs';
-import {validateSession} from './productions.mjs';
+import {ApiError,digest} from './store.mjs';
+import {validateSession,isDefiniteWorkflowRejection} from './productions.mjs';
 import {assertActiveProfile,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS} from './media-modes.mjs';
 import {isDeepStrictEqual} from 'node:util';
+import {randomUUID} from 'node:crypto';
 
 export async function productionRoute({req,res,path,url,role,store,engine,productions,workflows,mossPe,qwenPe,body,json,abortSession=()=>{},cancelProductionPe=()=>{},validateStopTurn=()=>{}}) {
   if(!productions||!workflows) return false;
@@ -28,25 +29,42 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
   }
   if(path==='/api/productions'&&req.method==='GET') {json(res,200,{productions:productions.list(session,url.searchParams.get('requestId'))});return true;}
   if(path==='/api/workflows/draft'&&req.method==='POST') {
-    const input=await body(req,131072),p=productions.get(input.productionId,session);productions.check(p,input.expectedRevision);
+    const input=await body(req,131072),p=productions.get(input.productionId,session);productions.check(p,input.expectedRevision);productions.assertNoPendingWorkflow(p.id,session);
     assertActiveProfile(p.brief.modelProfile);
     if((input.modelProfile??workflows.profileId??'qwen-photo-v1')!==(p.brief.modelProfile??'qwen-photo-v1'))throw new ApiError(409,'制作で指定した画像モデルとワークフローのモデルが一致しません。');
-    const workflow=await workflows.saveDraft({...input,mode:input.mode??p.brief.mode??'t2i',inputAssetId:input.inputAssetId??p.brief.inputAssetId??null,briefInputIds:p.brief.inputAssetIds??(p.brief.inputAssetId?[p.brief.inputAssetId]:[]),sessionId:session});
-    let adoption=null;
-    if(input.enhancementRunId!==undefined){
-      const kind=store.get(input.enhancementRunId)?.kind,coordinator=kind==='qwen-pe'?qwenPe:kind==='moss-pe'?mossPe:null;
-      if(!coordinator)throw new ApiError(409,'PE adoption run or service unavailable');
-      if(kind==='qwen-pe'&&await coordinator.licenseCheck()!==true)throw new ApiError(403,'Qwen research license purpose is unconfirmed');
-      adoption=coordinator.assertWorkflowAdoption(input.enhancementRunId,session,p.id,workflow);
-    }
-    const production=productions.bindWorkflow(p.id,session,input.expectedRevision,workflow,adoption);
+    let preparation=null,adoption=null,admissionAttempted=false;
+    try {
+    const workflow=await workflows.saveDraft({...input,mode:input.mode??p.brief.mode??'t2i',inputAssetId:input.inputAssetId??p.brief.inputAssetId??null,briefInputIds:p.brief.inputAssetIds??(p.brief.inputAssetId?[p.brief.inputAssetId]:[]),sessionId:session,beforeWrite:async snapshot=>{
+      if(input.enhancementRunId!==undefined){
+        const kind=store.get(input.enhancementRunId)?.kind,coordinator=kind==='qwen-pe'?qwenPe:kind==='moss-pe'?mossPe:null;
+        if(!coordinator)throw new ApiError(409,'PE adoption run or service unavailable');
+        if(kind==='qwen-pe'&&await coordinator.licenseCheck()!==true)throw new ApiError(403,'Qwen research license purpose is unconfirmed');
+        adoption=coordinator.assertWorkflowAdoption(input.enhancementRunId,session,p.id,snapshot);
+      }
+      admissionAttempted=true;
+      preparation=productions.beginWorkflowPreparation(p.id,session,input.requestId===undefined?{...input,requestId:randomUUID()}:input);
+    }});
+    if(!preparation)throw new ApiError(503,'workflow受付記録がありません。結果を保留してください。');
+    const production=productions.bindWorkflow(p.id,session,input.expectedRevision,workflow,adoption,preparation);
     json(res,201,{workflow,production,validation:{valid:true}});return true;
+    } catch (error) {
+      if(!admissionAttempted||isDefiniteWorkflowRejection(error)){if(Number.isInteger(error?.status)&&error.status>=400&&error.status<500)throw error;throw new ApiError(400,'保存前のworkflow検証に失敗しました。workflowは作成していません。');}
+      throw new ApiError(503,'workflow要求の途中結果を確認できません。要求IDで照合し、再送せず保留してください。');
+    }
   }
-  const match=path.match(/^\/api\/productions\/([a-f0-9-]{36})(?:\/(render|render-prepared|evaluate|iteration|feedback|cancel|cancel-owned|user-decision|planning-delivery|latest-completed|run-by-request))?$/);
+  const match=path.match(/^\/api\/productions\/([a-f0-9-]{36})(?:\/(render|render-prepared|evaluate|iteration|feedback|cancel|cancel-owned|user-decision|planning-delivery|latest-completed|run-by-request|workflow-by-request))?$/);
   if(!match) throw new ApiError(404,'制作APIがありません。');
   const [,id,action]=match;
   const production=productions.get(id,session);
+  if(req.method==='POST'&&action&&!['cancel','cancel-owned'].includes(action))productions.assertNoPendingWorkflow(id,session);
   if(!action&&req.method==='GET') {json(res,200,{production});return true;}
+  if(action==='workflow-by-request'&&req.method==='GET') {
+    if([...url.searchParams.keys()].some(key=>key!=='requestId')||url.searchParams.getAll('requestId').length!==1)throw new ApiError(400,'workflow要求IDを一つ指定してください。');
+    const result=productions.findWorkflowPreparation(id,session,url.searchParams.get('requestId'));
+    let workflow;try{workflow=await workflows.get(result.receipt.workflowId);}catch{throw new ApiError(409,'保存済みworkflowを確認できません。再送せず保留してください。');}
+    if(workflow.productionId!==id||workflow.id!==result.receipt.workflowId||workflow.sha256!==result.receipt.workflowHash||workflow.modelProfile!==result.production.brief.modelProfile||digest(workflow)!==result.receipt.snapshotHash)throw new ApiError(409,'workflow記録の所有情報またはhashが一致しません。');
+    json(res,200,{...result,workflow});return true;
+  }
   if(action==='run-by-request'&&req.method==='GET') {
     if([...url.searchParams.keys()].some(key=>key!=='requestId')||url.searchParams.getAll('requestId').length!==1)throw new ApiError(400,'生成要求IDを一つ指定してください。');
     const result=productions.findRenderByRequest(id,session,url.searchParams.get('requestId'));
