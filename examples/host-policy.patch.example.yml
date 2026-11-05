@@ -1,0 +1,24 @@
+# Override the configured studio-host entry from dsh-plugins in a private profile.
+# All ABSOLUTE_* values are placeholders and must be replaced before enabling.
+# Do not add a second studio-host entry alongside an existing configured one.
+- id: studio-host
+  disabled: true
+  config:
+    runtimeRoot: ABSOLUTE_PRIVATE_RUNTIME_ROOT
+    nodeExecutable: ABSOLUTE_DSH_NODE_EXECUTABLE
+    port: 3080
+    launcher:
+      executable: pwsh.exe
+      args:
+        - -NoLogo
+        - -NoProfile
+        - -NonInteractive
+        - -File
+        - ABSOLUTE_MEDIA_STUDIO_CHECKOUT/scripts/Start-Environment.ps1
+        - -Service
+        - DSH
+      cwd: ABSOLUTE_PRIVATE_RUNTIME_ROOT
+      env:
+        MEDIA_STUDIO_HOME: ABSOLUTE_PRIVATE_RUNTIME_ROOT
+    policyModule: ABSOLUTE_MEDIA_STUDIO_CHECKOUT/apps/dsh-plugins/studio-services/media-host-policy.mjs
+    requirePolicy: true

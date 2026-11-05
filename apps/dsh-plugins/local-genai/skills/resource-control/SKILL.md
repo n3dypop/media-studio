@@ -1,0 +1,7 @@
+---
+name: resource-control
+description: Use the controller-owned GPU lease and observable resource state; respect ownership, cancellation and uncertainty.
+---
+Use local_workflow_catalog for model/size limits and local_resource_status for the latest gate observation; the observation may be old. The Controller rechecks admission resources at execution, owns the GPU lease, tracks jobs, confirms release and restores Strata. Its disk observation or required space may be unknown. Do not assert a resource was checked without returned evidence, infer feasibility from nominal capacity, or bypass the Controller with raw HTTP, shell or model load/unload.
+
+Accept the user's stop request at any stage; local_production_cancel targets owned work only. Never stop foreign jobs. On OOM or resource shortage, use actual evidence and replan; never silently reduce requested resolution/duration or replace the chosen model. If a submission, cleanup or state is uncertain, preserve outputs and reconcile the same run before any retry; do not restart services to guess a solution.

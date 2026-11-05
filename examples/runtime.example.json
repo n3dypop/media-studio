@@ -1,0 +1,14 @@
+{
+  "MEDIA_STUDIO_HOME": "ABSOLUTE_PRIVATE_RUNTIME_ROOT",
+  "profilePluginConfig": {
+    "runtimeRoot": "ABSOLUTE_PRIVATE_RUNTIME_ROOT"
+  },
+  "privateEnvironmentFields": {
+    "dshPluginsDirectory": "ABSOLUTE_DSH_PLUGINS_CHECKOUT"
+  },
+  "notes": [
+    "Illustrative placeholders, not a live environment.json.",
+    "Set effective product paths and installation receipts in the private runtime.",
+    "Do not commit credentials, consent records or model weights."
+  ]
+}

@@ -1,0 +1,43 @@
+name: Build native probe
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy, rust-docs
+          targets: x86_64-pc-windows-msvc
+      - name: Check and test the locked native source
+        shell: pwsh
+        run: |
+          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'media-studio-native-checks'
+          cargo fmt --manifest-path apps/controller/native/system-probe/Cargo.toml --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked --target x86_64-pc-windows-msvc --manifest-path apps/controller/native/system-probe/Cargo.toml --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --target x86_64-pc-windows-msvc --manifest-path apps/controller/native/system-probe/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and package the Windows x64 probe
+        shell: pwsh
+        run: |
+          $package = ./scripts/Package-NativeProbe.ps1 -RuntimeRoot (Join-Path $env:RUNNER_TEMP 'media-studio-home') -OutputDirectory (Join-Path $env:RUNNER_TEMP 'media-studio-artifacts') -SourceCommit $env:GITHUB_SHA -AllowNetwork | Out-String | ConvertFrom-Json
+          if ($package.sourceDirty -isnot [bool] -or $package.sourceDirty) { throw 'CI packages require a clean source worktree.' }
+          ./tests/Test-NativePackage.ps1 -Archive $package.archive -ExpectedSourceCommit $env:GITHUB_SHA
+      - name: Upload the package, checksum and build receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-studio-probe-x86_64-pc-windows-msvc-${{ github.sha }}
+          path: ${{ runner.temp }}/media-studio-artifacts/*
+          if-no-files-found: error
+          retention-days: 30

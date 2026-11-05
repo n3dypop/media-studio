@@ -1,0 +1,19 @@
+# Illustrative override of the native llm-pi-ai entry. Do not apply placeholders.
+# The adapter is already part of the native web profile: do not insert a duplicate.
+# Keep these route IDs; display labels can identify your actual installed model.
+- id: llm-pi-ai
+  config:
+    providers:
+      local-strata:
+        displayName: Strata
+        api: openai-completions
+        baseURL: http://127.0.0.1:3090/v1
+        apiKeyEnv: MEDIA_STUDIO_DSH_TOKEN
+        models:
+          - id: strata-core
+            name: ACTUAL_INSTALLED_CORE_MODEL_DISPLAY_NAME
+            contextWindow: VERIFIED_CONTEXT_WINDOW_TOKENS
+            maxTokens: VERIFIED_MODEL_OUTPUT_CAPACITY_TOKENS
+            input:
+              - text
+              - image

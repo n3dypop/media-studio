@@ -1,0 +1,78 @@
+# Configure paths, Controller access and the local provider in a private profile.
+# Module names below are relative to this ROOT bundle, including preset children.
+# Enable the outer preset AND its managed local-genai child after configuration.
+- insert:
+    - id: local-genai-gateway
+      name: ./apps/dsh-plugins/local-genai/gateway.mjs
+      disabled: true
+      config:
+        runtimeRoot: ABSOLUTE_PRIVATE_RUNTIME_ROOT
+        controllerUrl: http://127.0.0.1:3090
+        tokenFile: data/controller/dsh-token
+    - id: preset-local-image
+      name: '@deepseek-ai/dsh-agent-preset'
+      disabled: true
+      config:
+        id: local-image
+        name: media-studio
+        description: Managed local media planning, generation, review and iteration.
+        order: 0
+        plugins:
+          - id: local-genai
+            name: ./apps/dsh-plugins/local-genai/index.mjs
+            disabled: true
+            config:
+              runtimeRoot: ABSOLUTE_PRIVATE_RUNTIME_ROOT
+              controllerUrl: http://127.0.0.1:3090
+              tokenFile: data/controller/dsh-token
+              role: studio
+          - id: local-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: media-studio-compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+            config:
+              - id: media-studio-compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+                config:
+                  summarizationProvider: local-strata
+                  summarizationModel: strata-core
+          - id: media-studio-skills
+            name: cordis:group
+            group: true
+            isolate:
+              skills: true
+            config:
+              - id: media-studio-skill-registry
+                name: '@deepseek-ai/dsh-skill'
+              - id: media-studio-skill-source
+                name: ./apps/dsh-plugins/local-genai/skills.mjs
+              - id: media-studio-skill-tool
+                name: '@deepseek-ai/dsh-tool-skill'
+                config:
+                  catalogDescriptionMaxLength: 220
+    - id: media-results
+      name: ./apps/dsh-plugins/media-results/index.mjs
+      disabled: true
+      config:
+        runtimeRoot: ABSOLUTE_PRIVATE_RUNTIME_ROOT
+    - id: studio-controls
+      name: ./apps/dsh-plugins/studio-controls/index.mjs
+      disabled: true
+      config:
+        runtimeRoot: ABSOLUTE_PRIVATE_RUNTIME_ROOT
+    - id: studio-preset
+      name: ./apps/dsh-plugins/studio-preset/index.mjs
+      disabled: true
+    - id: studio-monitor
+      name: ./apps/dsh-plugins/studio-monitor/index.mjs
+      disabled: true
+      config:
+        runtimeRoot: ABSOLUTE_PRIVATE_RUNTIME_ROOT
+    - id: studio-services
+      name: ./apps/dsh-plugins/studio-services/index.mjs
+      disabled: true
+      config:
+        runtimeRoot: ABSOLUTE_PRIVATE_RUNTIME_ROOT

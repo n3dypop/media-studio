@@ -1,0 +1,25 @@
+{
+  "name": "@n3dypop/media-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Managed local media production with DeepSeek Harness, Strata and ComfyUI.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25",
+    "dsh": "0.2.1-rc.5 || 0.2.2-rc.1"
+  },
+  "scripts": {
+    "check": "node scripts/check-package.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./dsh.bundle.patch.yml"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/n3dypop/media-studio.git"
+  }
+}

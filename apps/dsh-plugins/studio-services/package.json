@@ -1,0 +1,28 @@
+{
+  "name": "studio-services",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Managed local service lifecycle inside DSH",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings-general",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=24",
+    "dsh": "0.2.1-rc.5 || 0.2.2-rc.1"
+  },
+  "license": "MIT"
+}

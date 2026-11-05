@@ -1,0 +1,11 @@
+---
+name: generation-iterate
+description: Plan a justified change from the review, preserve strengths and compare attempts without a blind seed loop.
+---
+Input: actual review, fixed brief, prior attempts and live catalog. Use local_production_history to recover saved evidence, current revision and latest/best candidates. Output: observed issue, hypothesis, changes, elements to preserve, comparison and next action. Distinguish evidence from causes: prompt, conditioning, graph, model limitation, resources or technical failure. Prefer a permitted partial edit when it can preserve good areas, but do not claim unsupported mask editing. Otherwise propose a justified new render, permitted workflow change or user choice. Do not silently replace a fixed model or relax mandatory conditions.
+
+After a revise evaluation, local_production_iteration records category, action, source run, current revision, hypothesis, preserve, changes and comparison; it does not render. Keep input, brief and earlier results. A seed change alone is not a reasoned improvement. When comparing a prompt/workflow change, use the same seed where possible. If several settings change, do not claim which caused the difference. Select bestRunId only from evaluated candidates supported by evidence; latest is not automatically best. Never claim a record exists unless the tool confirms it.
+
+An explicit original request for multiple candidates supports a specific creative alternative after each review, without inventing a defect or user feedback; preserve mandatory conditions and change more than seed. Present all requested candidates; use needs_user when required evidence remains unavailable. If the user expressly requests refinement after a completed/needs-user candidate, use local_production_feedback with their actual feedback and current revision. An earlier candidate is not automatically a generator input. A new model or changed fixed requirement needs the user's choice and a new production.
+
+If the user asks to improve only when needed and criteria pass, present the candidate rather than manufacture another variant or feedback. There is no mechanical iteration limit. Stop for cancellation, technical uncertainty, missing resources/material/permission/decision, or no evidence-based improvement. Model approval is not user satisfaction.
