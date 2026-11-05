@@ -11,6 +11,7 @@ import {QWEN_PE_CONTRACT,assertQwenPeInputDimensions} from './qwen21-prompt-enha
 import {inputRgbaBytesFloor} from './input-memory-floor.mjs';
 import {GateError} from './resource-gate.mjs';
 import {readExternalPrompt} from './external-prompts.mjs';
+import {scheduleOwnedLaunch} from './owned-launch.mjs';
 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const now=()=>new Date().toISOString();
@@ -92,7 +93,9 @@ export class MossPeCoordinator{
   launch(id,{recovery=false}={}){
     if(this.work.has(id))return;
     this.work.add(id);
-    const work=this.execute(id,{recovery}).catch(async error=>{
+    let execution;
+    try{execution=this.execute(id,{recovery});}catch(error){execution=Promise.reject(error);}
+    const work=Promise.resolve(execution).catch(async error=>{
       let run=this.store.get(id);if(!run||terminalPhases.has(run.phase))return;
       const gate=this.gate.status();
       if(!run.pePreSubmit&&!run[this.stateKey]&&gate.generationRunId!==id&&gate.blocked===false&&['core','none'].includes(gate.owner))return this.store.update(id,{phase:run.cancelRequested?'cancelled':'failed',error:run.cancelRequested?null:errorText(error)},`${this.family}_pe_preflight_failed`);
@@ -207,7 +210,7 @@ export class MossPeCoordinator{
       if(run.productionId!==production.id)throw new ApiError(409,'PE run belongs to another production');
       if(!terminalPhases.has(run.phase)){
         this.store.cancel(id);
-        if(!this.work.has(id))setImmediate(()=>this.launch(id,{recovery:true}));
+        if(!this.work.has(id))scheduleOwnedLaunch({store:this.store,run,launch:()=>this.launch(id,{recovery:true})});
       }
     }
   }

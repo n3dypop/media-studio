@@ -10,6 +10,7 @@ import {assetRoute} from './assets.mjs';
 import {mossPeRoute} from './moss-pe-http.mjs';
 import {monitorSnapshot} from './monitor-snapshot.mjs';
 import {controllerSwitchStatus} from './host-switch-status.mjs';
+import {scheduleOwnedLaunch} from './owned-launch.mjs';
 
 const equal = (a,b) => typeof a==='string'&&Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 async function body(req, limit = 32768) {
@@ -154,7 +155,7 @@ export function createControllerServer({store,engine,token,dshToken,productions,
         if(role!=='admin') throw new ApiError(403,'DSHからの生成は制作APIを使用してください。');
         const input=await body(req);input.modelProfile??=workflows?.profileId??profile;
         const result=store.create(normalizeRequest(input));
-        if(result.created) setImmediate(()=>engine.launch(result.run.id));
+        if(result.created) scheduleOwnedLaunch({store,run:result.run,launch:()=>engine.launch(result.run.id)});
         return json(res,result.created?202:200,{run:result.run});
       }
       const match=path.match(/^\/api\/runs\/([a-f0-9-]{36})(?:\/(cancel|events|artifacts|reconcile|recover-server)(?:\/([a-zA-Z0-9_.-]+))?)?$/);
@@ -171,18 +172,26 @@ export function createControllerServer({store,engine,token,dshToken,productions,
         }
         if(action==='cancel'&&req.method==='POST') {
           if(role==='dsh') throw new ApiError(403,'制作全体の停止APIを使用してください。');
-          const input=await body(req);let stopError;
-          if(run.productionId) {search?.validateStopTurn?.(run.sessionId,input.searchTurn);productions.cancel(run.productionId,run.sessionId);try{abortSession(run.sessionId,input.searchTurn);}catch(error){stopError=error;}}
-          const next=store.cancel(id);
-          if(!terminalPhases.has(next.phase)&&!engine.work.has(id)) setImmediate(()=>engine.launch(id,true));
-          if(stopError)throw stopError;
-          return json(res,202,{run:next});
+          const input=await body(req);
+          if(run.productionId)search?.validateStopTurn?.(run.sessionId,input.searchTurn);
+          try {
+            let stopError;
+            if(run.productionId) {productions.cancel(run.productionId,run.sessionId);try{abortSession(run.sessionId,input.searchTurn);}catch(error){stopError=error;}}
+            const next=store.cancel(id);
+            if(!terminalPhases.has(next.phase)&&!engine.work.has(id)) scheduleOwnedLaunch({store,run:next,launch:()=>engine.launch(id,true)});
+            if(stopError)throw stopError;
+            return json(res,202,{run:next});
+          } catch {
+            // The production and run cancellation writes may already have
+            // committed; subsequent 4xx-shaped failures cannot prove refusal.
+            throw new ApiError(503,'停止の受付後に処理結果を確認できません。再送せず、この生成と制作の状態を確認してください。');
+          }
         }
         if(action==='reconcile'&&req.method==='POST') {
           if(role!=='admin') throw new ApiError(403,'再照合は本人操作が必要です。');
           await body(req);
           if(terminalPhases.has(run.phase)) return json(res,200,{run});
-          if(!engine.work.has(id)) setImmediate(()=>engine.launch(id,true));
+          if(!engine.work.has(id)) scheduleOwnedLaunch({store,run,launch:()=>engine.launch(id,true)});
           return json(res,202,{run});
         }
         if(action==='recover-server'&&req.method==='POST') {

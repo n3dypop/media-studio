@@ -3,6 +3,7 @@ import {validateSession,isDefiniteWorkflowRejection} from './productions.mjs';
 import {assertActiveProfile,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS} from './media-modes.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {randomUUID} from 'node:crypto';
+import {scheduleOwnedLaunch} from './owned-launch.mjs';
 
 export async function productionRoute({req,res,path,url,role,store,engine,productions,workflows,mossPe,qwenPe,body,json,abortSession=()=>{},cancelProductionPe=()=>{},validateStopTurn=()=>{}}) {
   if(!productions||!workflows) return false;
@@ -82,7 +83,7 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
     if([...MOSS_OFFICIAL_IDS,...QWEN21_OFFICIAL_IDS].includes(production.brief.modelProfile))throw new ApiError(409,'この公式workflowは保存済み条件で生成してください。render-preparedを使用し、設定変更は新しいdraftに固定してください。');
     const input=await body(req),workflow=await workflows.get(input.workflowId);
     const result=productions.render(id,session,input,workflow);
-    if(result.created) setImmediate(()=>engine.launch(result.run.id));
+    if(result.created) scheduleOwnedLaunch({store,run:result.run,launch:()=>engine.launch(result.run.id)});
     json(res,result.created?202:200,{run:result.run,production:result.production});return true;
   }
   if(action==='render-prepared'&&req.method==='POST') {
@@ -91,7 +92,7 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
     if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['requestId','workflowId','expectedRevision'].includes(key))||typeof input.workflowId!=='string'||!Number.isSafeInteger(input.expectedRevision))throw new ApiError(400,'workflowId、expectedRevision、requestIdのみを指定してください。');
     const workflow=await workflows.get(input.workflowId);
     const result=productions.renderPrepared(id,session,input,workflow);
-    if(result.created)setImmediate(()=>engine.launch(result.run.id));
+    if(result.created)scheduleOwnedLaunch({store,run:result.run,launch:()=>engine.launch(result.run.id)});
     json(res,result.created?202:200,{run:result.run,production:result.production});return true;
   }
   if(action==='evaluate'&&req.method==='POST') {json(res,200,productions.evaluate(id,session,await body(req)));return true;}
@@ -113,8 +114,10 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
     // Deliberately do not abortSession: another production's inference/search
     // in this conversation must not be cancelled by this production's button.
     let stopError;try{cancelProductionPe(p,session);}catch(error){stopError=error;}
-    for(const runId of p.attempts){const run=store.get(runId);if(run&&!['completed','cancelled','failed'].includes(run.phase)&&!engine.work.has(runId))setImmediate(()=>engine.launch(runId,true));}
-    if(stopError)throw stopError;
+    try{for(const runId of p.attempts){const run=store.get(runId);if(run&&!['completed','cancelled','failed'].includes(run.phase)&&!engine.work.has(runId))scheduleOwnedLaunch({store,run,launch:()=>engine.launch(runId,true)});}}catch(error){stopError??=error;}
+    // The durable cancellation has already committed. A later 4xx-shaped
+    // cleanup failure is not evidence that no cancellation occurred.
+    if(stopError)throw new ApiError(503,'停止の受付後に処理結果を確認できません。再送せず、この制作の状態を確認してください。');
     json(res,202,{production:p});return true;
   }
   if(action==='cancel'&&req.method==='POST') {
@@ -123,11 +126,11 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
     validateStopTurn(session,input.searchTurn);
     const p=productions.cancel(id,session,{expectedRunId:input.expectedRunId,expectedRevision:input.expectedRevision});
     let stopError;try{cancelProductionPe(p,session);}catch(error){stopError=error;}try{abortSession(session,input.searchTurn);}catch(error){stopError??=error;}
-    for(const runId of p.attempts) {
+    try{for(const runId of p.attempts) {
       const run=store.get(runId);
-      if(run&&!['completed','cancelled','failed'].includes(run.phase)&&!engine.work.has(runId)) setImmediate(()=>engine.launch(runId,true));
-    }
-    if(stopError)throw stopError;
+      if(run&&!['completed','cancelled','failed'].includes(run.phase)&&!engine.work.has(runId)) scheduleOwnedLaunch({store,run,launch:()=>engine.launch(runId,true)});
+    }}catch(error){stopError??=error;}
+    if(stopError)throw new ApiError(503,'停止の受付後に処理結果を確認できません。再送せず、この制作の状態を確認してください。');
     json(res,202,{production:p});return true;
   }
   throw new ApiError(405,'この操作は対応していません。');

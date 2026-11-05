@@ -55,7 +55,7 @@ test('single-production cancellation does not abort the conversation or another 
 });
 test('PE cancellation failure still schedules recovery for that production without aborting the session',async()=>{
   const id=randomUUID(),runId=randomUUID(),launched=[];let aborts=0;
-  await assert.rejects(productionRoute({req:{method:'POST',headers:{'x-dsh-session':'owner'}},res:{},path:`/api/productions/${id}/cancel-owned`,url:new URL('http://local/'),role:'admin',store:{get:r=>({id:r,phase:'generating'})},engine:{work:new Map(),launch:(...args)=>launched.push(args)},productions:{get:()=>({id}),cancel:()=>({id,attempts:[runId]})},workflows:{},body:async()=>({expectedRevision:4,expectedRunId:runId}),json:()=>{},abortSession:()=>{aborts++;},cancelProductionPe:()=>{throw Error('PE cancellation unknown');}}),/PE cancellation unknown/);
+  await assert.rejects(productionRoute({req:{method:'POST',headers:{'x-dsh-session':'owner'}},res:{},path:`/api/productions/${id}/cancel-owned`,url:new URL('http://local/'),role:'admin',store:{get:r=>({id:r,phase:'generating'})},engine:{work:new Map(),launch:(...args)=>launched.push(args)},productions:{get:()=>({id}),cancel:()=>({id,attempts:[runId]})},workflows:{},body:async()=>({expectedRevision:4,expectedRunId:runId}),json:()=>{},abortSession:()=>{aborts++;},cancelProductionPe:()=>{throw Error('PE cancellation unknown');}}),error=>error.status===503 && /停止の受付後/.test(error.message));
   await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(launched,[[runId,true]]);assert.equal(aborts,0);
 });
 const origin='http://127.0.0.1:3080';

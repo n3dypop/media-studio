@@ -86,6 +86,20 @@ export class RunStore {
       return run;
     });
   }
+  markLaunchFailure(owner) {
+    return this.transaction(() => {
+      const run=this.get(owner.id);
+      // specHash can change when an integrated enhancer produces effectiveSpec;
+      // it is not an owner identity. The request and controller IDs are stable.
+      const keys=['id','requestId','controllerId','sessionId','productionId','kind'];
+      if(!run||terminalPhases.has(run.phase)||keys.some(key=>run[key]!==owner[key])) return false;
+      const patch={phase:'needs_attention',error:'Owned run launch or execution failed unexpectedly. Check the run and resources; failure handling did not retry or release resources.'};
+      Object.assign(run,patch,{updatedAt:new Date().toISOString()});
+      this.db.prepare('UPDATE runs SET phase=?,json=? WHERE id=?').run(run.phase,JSON.stringify(run),run.id);
+      this.event(run.id,'deferred_launch_failed',patch);
+      return true;
+    });
+  }
   cancel(id) {
     const run = this.get(id);
     if (!run) throw new ApiError(404, '生成記録がありません。');

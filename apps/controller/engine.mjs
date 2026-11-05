@@ -8,6 +8,7 @@ import {preflightDiagnostic,preflightSummary,makePreflightError} from './preflig
 import {QWEN21_OFFICIAL_IDS} from './media-modes.mjs';
 import {inputRgbaBytesFloor} from './input-memory-floor.mjs';
 import {MONITOR_INSTANCE_ID} from './monitor-identity.mjs';
+import {scheduleOwnedLaunch,recordOwnedLaunchFailure} from './owned-launch.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const message = error => String(error?.message ?? error).slice(0,1200);
@@ -41,8 +42,10 @@ export class RunEngine {
     }
     if (this.work.has(id)) return;
     this.work.add(id);
-    const promise = this.execute(id,recovery).catch(error => {
-      this.store.update(id,{phase:'needs_attention',error:message(error)},'unhandled_failure');
+    let execution;
+    try { execution=this.execute(id,recovery); } catch(error) { execution=Promise.reject(error); }
+    const promise = Promise.resolve(execution).catch(() => {
+      recordOwnedLaunchFailure(this.store,recorded);
     }).finally(() => this.work.delete(id));
     return promise;
   }
@@ -50,7 +53,7 @@ export class RunEngine {
     const run = this.store.active();
     if (!run) return;
     this.store.update(run.id,{phase:'recovery_required',recoveryFromPhase:run.recoveryFromPhase??run.phase,error:'コントローラ再開後の照合中です。新規送信は行いません。'},'restart');
-    this.launch(run.id,true);
+    scheduleOwnedLaunch({store:this.store,run,launch:()=>this.launch(run.id,true)});
   }
   recoverServer(id,input) {
     const run=this.store.get(id);
