@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {EventEmitter} from 'node:events';
+import {PassThrough,Writable} from 'node:stream';
+import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createHash} from 'node:crypto';
+import {createMaintenanceOwnerVerifier} from '../apps/dsh-plugins/studio-services/maintenance-owner.mjs';
+const hash=text=>createHash('sha256').update(text).digest('hex');
+test('only pinned local components reach the owner probe without passing a nonce',{skip:process.platform!=='win32'},async t=>{
+ const root=await mkdtemp(join(tmpdir(),'owner-candidate-'));t.after(()=>rm(root,{recursive:true,force:true}));await mkdir(join(root,'scripts/maintenance'),{recursive:true});for(const [p,v] of [['scripts/maintenance/Verify-WebHostOwner.ps1','helper'],['scripts/maintenance/Invoke-WebSearchCutover.ps1','wrapper'],['pwsh.exe','pwsh']])await writeFile(join(root,p),v);
+ const secret='a'.repeat(64);let received='',argumentsSeen=[];
+ const spawnProcess=(_exe,args)=>{argumentsSeen=args;const p=new EventEmitter();p.stdout=new PassThrough();p.stdin=new Writable({write(chunk,_encoding,done){received+=chunk.toString();done();},final(done){p.stdout.end('verified\n');setImmediate(()=>p.emit('exit',0));done();}});p.kill=()=>{};return p;};
+ let epoch={pid:process.pid,startTimeUtcTicks:'638000000000000000',executable:process.execPath};
+ await mkdir(join(root,'runtime/maintenance'),{recursive:true});const fence={pid:123,ticks:'456',nonceHash:hash(secret),targetPid:epoch.pid,targetTicks:epoch.startTimeUtcTicks,targetExe:epoch.executable};await writeFile(join(root,'runtime/maintenance/fence-ready.json'),JSON.stringify(fence));
+ const verifier=createMaintenanceOwnerVerifier({installationRoot:root,runtimeRoot:root,pwshPath:join(root,'pwsh.exe'),helperHash:hash('helper'),wrapperHash:hash('wrapper'),pwshHash:hash('pwsh'),epochProvider:async()=>epoch,spawnProcess});
+ assert.deepEqual(await verifier.verify(),{nonceHash:hash(secret),fenceInfoHash:hash(JSON.stringify(fence)),holderPid:123,holderTicks:'456'});assert.equal(received,'');assert.ok(!argumentsSeen.join(' ').includes(secret));assert.ok(!argumentsSeen.includes('-Info'));assert.ok(!argumentsSeen.includes('-ExpectedScript'));
+ const ready=join(root,'runtime/maintenance/fence-ready.json');await writeFile(ready,'{');const completed=new Promise((ok,fail)=>setTimeout(()=>writeFile(ready,JSON.stringify(fence)).then(ok,fail),100));assert.equal((await verifier.verify()).nonceHash,hash(secret));await completed;
+ epoch={...epoch,pid:process.pid+1};assert.equal(await verifier.verify(),false);epoch={...epoch,pid:process.pid};await writeFile(join(root,'scripts/maintenance/Invoke-WebSearchCutover.ps1'),'changed');assert.equal(await verifier.verify(),false);
+});

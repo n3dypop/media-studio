@@ -1,12 +1,23 @@
 import {randomUUID} from 'node:crypto';
 import {ApiError,digest,normalizeRequest,terminalPhases} from './store.mjs';
 import {validateEnhancementSpec} from './enhancer.mjs';
-import {MODEL_PROFILES} from './workflows.mjs';
+import {MODEL_PROFILES,workflowGraphHash} from './workflows.mjs';
 import {mediaIntent,assertModeProfile,assertActiveProfile,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS,UUID} from './media-modes.mjs';
+import {hasBinaryPrimaryKey,ensureCoreTables} from './schema-integrity.mjs';
 const officialInputProfile=id=>[...MOSS_OFFICIAL_IDS,...QWEN21_OFFICIAL_IDS].includes(id);
 
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const definiteWorkflowRejection=Symbol('workflow-preparation-rejected-before-write');
+const productionReceiptSchemas={
+  workflow_preparations:'session_id TEXT NOT NULL,request_id TEXT NOT NULL,production_id TEXT NOT NULL,payload_hash TEXT NOT NULL,expected_revision INTEGER NOT NULL,state TEXT NOT NULL,workflow_id TEXT,workflow_hash TEXT,snapshot_hash TEXT,PRIMARY KEY(session_id,request_id)',
+  workflow_preparation_rejections:'session_id TEXT NOT NULL,request_id TEXT NOT NULL,production_id TEXT NOT NULL,payload_hash TEXT NOT NULL,expected_revision INTEGER NOT NULL,http_status INTEGER NOT NULL,receipt_json TEXT NOT NULL,receipt_hash TEXT NOT NULL,PRIMARY KEY(session_id,request_id)',
+  workflow_request_fence_abandons:'session_id TEXT NOT NULL,request_id TEXT NOT NULL,production_id TEXT NOT NULL,payload_hash TEXT NOT NULL,expected_revision INTEGER NOT NULL,receipt_json TEXT NOT NULL,receipt_hash TEXT NOT NULL,PRIMARY KEY(session_id,request_id)',
+  legacy_render_receipts:'session_id TEXT NOT NULL,request_id TEXT NOT NULL,production_id TEXT NOT NULL,run_id TEXT NOT NULL,payload_hash TEXT NOT NULL,expected_revision INTEGER NOT NULL,production_revision INTEGER NOT NULL,workflow_id TEXT NOT NULL,workflow_hash TEXT NOT NULL,event_seq INTEGER NOT NULL,PRIMARY KEY(session_id,request_id)',
+  prepared_render_receipts:'session_id TEXT NOT NULL,request_id TEXT NOT NULL,production_id TEXT NOT NULL,run_id TEXT NOT NULL,payload_hash TEXT NOT NULL,expected_revision INTEGER NOT NULL,production_revision INTEGER NOT NULL,workflow_id TEXT NOT NULL,workflow_hash TEXT NOT NULL,snapshot_hash TEXT NOT NULL,event_seq INTEGER NOT NULL,PRIMARY KEY(session_id,request_id)',
+  workflow_preparation_abandons:'session_id TEXT NOT NULL,request_id TEXT NOT NULL,production_id TEXT NOT NULL,payload_hash TEXT NOT NULL,expected_revision INTEGER NOT NULL,observed_revision INTEGER NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(session_id,request_id)',
+  production_action_receipts:'session_id TEXT NOT NULL,request_id TEXT NOT NULL,production_id TEXT NOT NULL,operation TEXT NOT NULL,payload_hash TEXT NOT NULL,expected_revision INTEGER NOT NULL,production_revision INTEGER NOT NULL,result_id TEXT NOT NULL,result_hash TEXT NOT NULL,event_seq INTEGER NOT NULL,PRIMARY KEY(session_id,request_id)',
+  production_cancel_receipts:'session_id TEXT NOT NULL,request_id TEXT NOT NULL,production_id TEXT NOT NULL,operation TEXT NOT NULL,payload_hash TEXT NOT NULL,receipt_json TEXT NOT NULL,receipt_hash TEXT NOT NULL,event_seq INTEGER NOT NULL,PRIMARY KEY(session_id,request_id)',
+};
 export const isDefiniteWorkflowRejection=error=>error?.[definiteWorkflowRejection]===true;
 const text=(value,max,label)=>{
   if(typeof value!=='string'||!value.trim()||value.length>max) throw new ApiError(400,`${label}が不正です。`);
@@ -36,9 +47,139 @@ export class ProductionStore {
     this.defaultModelProfile=defaultModelProfile;
     this.store=store;this.db=store.db;
     this.assets=assets;
-    this.db.exec(`CREATE TABLE IF NOT EXISTS productions(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,request_id TEXT NOT NULL,payload_hash TEXT NOT NULL,json TEXT NOT NULL,UNIQUE(session_id,request_id));
-      CREATE TABLE IF NOT EXISTS evaluations(id TEXT PRIMARY KEY,production_id TEXT NOT NULL,run_id TEXT UNIQUE NOT NULL,json TEXT NOT NULL);`);
-    this.db.exec(`CREATE TABLE IF NOT EXISTS workflow_preparations(session_id TEXT NOT NULL,request_id TEXT NOT NULL,production_id TEXT NOT NULL,payload_hash TEXT NOT NULL,expected_revision INTEGER NOT NULL,state TEXT NOT NULL,workflow_id TEXT,workflow_hash TEXT,snapshot_hash TEXT,PRIMARY KEY(session_id,request_id));`);
+    this.store.transaction(()=>{
+      ensureCoreTables(this.db,{marker:'productionCoreSchema:v1',legacyMarkers:['productionReceiptSchema:v1','productionMutationRejections:v1'],tables:[
+        {name:'productions',create:'CREATE TABLE productions(id TEXT PRIMARY KEY,session_id TEXT NOT NULL,request_id TEXT NOT NULL,payload_hash TEXT NOT NULL,json TEXT NOT NULL,UNIQUE(session_id,request_id))',columns:[['id','TEXT',0,1],['session_id','TEXT',1,0],['request_id','TEXT',1,0],['payload_hash','TEXT',1,0],['json','TEXT',1,0]],primary:['id'],unique:[['session_id','request_id']]},
+        {name:'evaluations',create:'CREATE TABLE evaluations(id TEXT PRIMARY KEY,production_id TEXT NOT NULL,run_id TEXT UNIQUE NOT NULL,json TEXT NOT NULL)',columns:[['id','TEXT',0,1],['production_id','TEXT',1,0],['run_id','TEXT',1,0],['json','TEXT',1,0]],primary:['id'],unique:[['run_id']]},
+      ]});
+      const hadReceiptMarker=Boolean(this.db.prepare("SELECT 1 FROM meta WHERE key='productionReceiptSchema:v1'").get());this.initializeProductionReceipts();this.initializeMutationRejections(hadReceiptMarker);
+    });
+  }
+  productionReceiptsManifest(){const data={};for(const table of Object.keys(productionReceiptSchemas))data[table]=this.db.prepare(`SELECT * FROM ${table} ORDER BY session_id,request_id`).all();return JSON.stringify({sha256:digest(data),counts:Object.fromEntries(Object.entries(data).map(([key,rows])=>[key,rows.length]))});}
+  initializeProductionReceipts(){
+      const marker=this.db.prepare("SELECT value FROM meta WHERE key='productionReceiptSchema:v1'").get(),saved=this.db.prepare("SELECT value FROM meta WHERE key='productionReceiptManifest:v1'").get();
+      if(marker&&marker.value!=='done'||marker&&!saved||saved&&!marker)throw Error('Production receipt marker or manifest is invalid');
+      if(!marker&&!saved&&this.db.prepare("SELECT 1 FROM meta WHERE key IN ('productionMutationRejections:v1','productionMutationManifest:v1') LIMIT 1").get())throw Error('Production receipt migration evidence is missing');
+      for(const [table,definition] of Object.entries(productionReceiptSchemas)){
+        const found=this.db.prepare("SELECT type FROM sqlite_master WHERE name=?").get(table);if(!found){if(marker)throw Error('Production receipt table is missing after migration');this.db.exec(`CREATE TABLE ${table}(${definition})`);}else if(found.type!=='table')throw Error('Production receipt storage is not a table');
+        const expected=definition.split(',PRIMARY KEY(')[0].split(',').map(part=>part.trim().split(/\s+/)),columns=this.db.prepare(`PRAGMA table_xinfo(${table})`).all();
+        if(columns.length!==expected.length||columns.some((c,i)=>c.name!==expected[i][0]||String(c.type).toUpperCase()!==expected[i][1]||c.notnull!==(expected[i].includes('NOT')?1:0)||c.hidden!==0||c.pk!==(i===0?1:i===1?2:0))||!hasBinaryPrimaryKey(this.db,table,['session_id','request_id']))throw Error('Production receipt schema is invalid');
+      }
+      const actual=this.productionReceiptsManifest();if(saved&&saved.value!==actual)throw Error('Production receipt manifest differs');
+      for(const row of this.db.prepare('SELECT * FROM workflow_preparations').all()){
+        const rejected=this.db.prepare('SELECT * FROM workflow_preparation_rejections WHERE session_id=? AND request_id=?').get(row.session_id,row.request_id),fenced=this.db.prepare('SELECT * FROM workflow_request_fence_abandons WHERE session_id=? AND request_id=?').get(row.session_id,row.request_id),legacy=this.db.prepare('SELECT * FROM workflow_preparation_abandons WHERE session_id=? AND request_id=?').get(row.session_id,row.request_id);
+        if(!['started','committed','rejected','abandoned'].includes(row.state)||!Number.isSafeInteger(row.expected_revision)||row.expected_revision<0||!/^[a-f0-9]{64}$/.test(row.payload_hash??'')||(row.state==='rejected')!==Boolean(rejected)||(row.state==='abandoned'?Number(Boolean(fenced))+Number(Boolean(legacy))!==1:Boolean(fenced)||Boolean(legacy))||(row.state==='committed'?typeof row.workflow_id!=='string'||!/^[a-f0-9]{64}$/.test(row.workflow_hash??'')||!/^[a-f0-9]{64}$/.test(row.snapshot_hash??''):row.workflow_id!==null||row.workflow_hash!==null||row.snapshot_hash!==null))throw Error('Workflow receipt state differs');
+        for(const detail of [rejected,fenced,legacy].filter(Boolean))if(detail.production_id!==row.production_id||detail.payload_hash!==row.payload_hash||detail.expected_revision!==row.expected_revision)throw Error('Workflow receipt ownership differs');
+        for(const detail of [rejected,fenced].filter(Boolean)){let receipt;try{receipt=JSON.parse(detail.receipt_json);}catch{}if(!receipt||digest(receipt)!==detail.receipt_hash||receipt.sessionId!==row.session_id||receipt.requestId!==row.request_id||receipt.productionId!==row.production_id||receipt.payloadHash!==row.payload_hash||receipt.expectedRevision!==row.expected_revision||receipt.state!==row.state)throw Error('Workflow receipt evidence differs');}
+      }
+      for(const table of ['workflow_preparation_rejections','workflow_request_fence_abandons','workflow_preparation_abandons'])for(const row of this.db.prepare(`SELECT session_id,request_id FROM ${table}`).all())if(!this.db.prepare('SELECT 1 FROM workflow_preparations WHERE session_id=? AND request_id=?').get(row.session_id,row.request_id))throw Error('Workflow receipt origin is missing');
+      // These event shapes were introduced with durable receipts and are
+      // independent evidence even if both schema markers have disappeared.
+      // Older generic render/evaluation events must not be promoted to proof.
+      for(const event of this.db.prepare("SELECT seq,run_id,type,json FROM events WHERE type IN ('production_cancel_receipt','render_requested','workflow_preparation_abandoned')").all()){
+        let data;try{data=JSON.parse(event.json);}catch{throw Error('Production receipt audit event is invalid');}
+        if(!data||typeof data!=='object'||Array.isArray(data))throw Error('Production receipt audit event is invalid');
+        if(event.type==='production_cancel_receipt'){
+          const r=data.receipt;if(!r||typeof r.sessionId!=='string'||typeof r.requestId!=='string'||r.productionId!==event.run_id)throw Error('Cancellation receipt audit is invalid');
+          const row=this.db.prepare('SELECT * FROM production_cancel_receipts WHERE session_id=? AND request_id=?').get(r.sessionId,r.requestId);
+          if(!row||row.production_id!==event.run_id||row.event_seq!==event.seq||digest(r)!==row.receipt_hash)throw Error('Cancellation receipt audit has no matching record');
+        }
+        if(event.type==='render_requested'&&Object.hasOwn(data,'preparedRequest')){
+          const r=data.preparedRequest,owner=this.db.prepare('SELECT session_id FROM productions WHERE id=?').get(event.run_id)?.session_id;
+          if(!r||typeof r.requestId!=='string'||typeof owner!=='string')throw Error('Prepared render receipt audit is invalid');
+          const row=this.db.prepare('SELECT * FROM prepared_render_receipts WHERE session_id=? AND request_id=?').get(owner,r.requestId);
+          if(!row||row.production_id!==event.run_id||row.event_seq!==event.seq||row.payload_hash!==r.payloadHash||row.run_id!==data.runId)throw Error('Prepared render receipt audit has no matching record');
+        }
+        if(event.type==='workflow_preparation_abandoned'){
+          const owner=this.db.prepare('SELECT session_id FROM productions WHERE id=?').get(event.run_id)?.session_id;
+          if(typeof owner!=='string'||typeof data.requestId!=='string')throw Error('Workflow abandonment audit is invalid');
+          const row=this.db.prepare('SELECT * FROM workflow_preparation_abandons WHERE session_id=? AND request_id=?').get(owner,data.requestId);
+          if(!row||row.production_id!==event.run_id||row.payload_hash!==data.payloadHash||row.expected_revision!==data.expectedRevision||row.observed_revision!==data.observedRevision)throw Error('Workflow abandonment audit has no matching record');
+        }
+      }
+      for(const table of ['legacy_render_receipts','prepared_render_receipts','production_action_receipts','production_cancel_receipts'])for(const row of this.db.prepare(`SELECT * FROM ${table}`).all()){
+        const event=this.db.prepare('SELECT run_id,type,json FROM events WHERE seq=?').get(row.event_seq);let data;try{data=JSON.parse(event?.json);}catch{}
+        const kind=table==='production_action_receipts'?({evaluate:'image_evaluated',iteration:'iteration_planned',feedback:'user_feedback_recorded'}[row.operation]):table==='production_cancel_receipts'?'production_cancel_receipt':'render_requested';
+        if(!event||event.run_id!==row.production_id||event.type!==kind||!data||((table==='legacy_render_receipts'||table==='prepared_render_receipts')&&(data.runId!==row.run_id||data.revision!==row.production_revision))||(table==='prepared_render_receipts'&&(!data.preparedRequest||data.preparedRequest.requestId!==row.request_id||data.preparedRequest.payloadHash!==row.payload_hash||data.preparedRequest.expectedRevision!==row.expected_revision||data.preparedRequest.workflowId!==row.workflow_id||data.preparedRequest.workflowHash!==row.workflow_hash||data.preparedRequest.snapshotHash!==row.snapshot_hash))||(table==='production_action_receipts'&&(!data[row.operation==='evaluate'?'evaluation':row.operation==='iteration'?'plan':'feedback']||digest(data[row.operation==='evaluate'?'evaluation':row.operation==='iteration'?'plan':'feedback'])!==row.result_hash))||(table==='production_cancel_receipts'&&(!data.receipt||digest(data.receipt)!==row.receipt_hash||digest(JSON.parse(row.receipt_json))!==row.receipt_hash)))throw Error('Production receipt event differs');
+      }
+      if(!marker)this.db.prepare("INSERT INTO meta(key,value) VALUES('productionReceiptSchema:v1','done')").run();if(!saved)this.db.prepare("INSERT INTO meta(key,value) VALUES('productionReceiptManifest:v1',?)").run(actual);
+  }
+  updateProductionReceiptsManifest(){const result=this.db.prepare("UPDATE meta SET value=? WHERE key='productionReceiptManifest:v1'").run(this.productionReceiptsManifest());if(result.changes!==1)throw Error('Production receipt manifest is missing');}
+  initializeMutationRejections(hadReceiptMarker=false){
+      const marker=this.db.prepare("SELECT value FROM meta WHERE key='productionMutationRejections:v1'").get(),table=this.db.prepare("SELECT type FROM sqlite_master WHERE name='production_mutation_rejections'").get();
+      if(marker&&marker.value!=='done')throw Error('Production rejection schema marker is invalid');
+      if(hadReceiptMarker&&!marker)throw Error('Production rejection migration evidence is missing');
+      if(!table){if(marker)throw Error('Production rejection table is missing after migration');this.db.exec('CREATE TABLE production_mutation_rejections(session_id TEXT NOT NULL,scope TEXT NOT NULL,request_id TEXT NOT NULL,operation TEXT NOT NULL,target_id TEXT,payload_hash TEXT NOT NULL,http_status INTEGER NOT NULL,recorded_at TEXT NOT NULL,event_seq INTEGER NOT NULL,PRIMARY KEY(session_id,scope,request_id))');}
+      else if(table.type!=='table')throw Error('Production rejection storage is not a table');
+      const columns=this.db.prepare('PRAGMA table_xinfo(production_mutation_rejections)').all(),names=['session_id','scope','request_id','operation','target_id','payload_hash','http_status','recorded_at','event_seq'];
+      if(columns.length!==names.length||columns.some((c,i)=>c.name!==names[i]||String(c.type).toUpperCase()!==([6,8].includes(i)?'INTEGER':'TEXT')||c.hidden!==0||c.notnull!==(i===4?0:1)||c.pk!==(i<3?i+1:0))||!hasBinaryPrimaryKey(this.db,'production_mutation_rejections',['session_id','scope','request_id']))throw Error('Production rejection schema is invalid');
+      const rows=this.db.prepare('SELECT * FROM production_mutation_rejections ORDER BY session_id,scope,request_id').all(),events=this.db.prepare("SELECT seq,run_id,json FROM events WHERE type='production_mutation_rejected' ORDER BY seq").all(),bySeq=new Map(events.map(event=>[event.seq,event]));
+      if(events.length!==rows.length)throw Error('Production rejection event count differs');
+      for(const row of rows){let event;try{event=JSON.parse(bySeq.get(row.event_seq)?.json);}catch{}const stored=bySeq.get(row.event_seq);
+        if(!stored||stored.run_id!==(row.target_id??row.request_id)||!event||event.sessionId!==row.session_id||event.operation!==row.operation||event.requestId!==row.request_id||event.targetId!==row.target_id||event.payloadHash!==row.payload_hash||event.httpStatus!==row.http_status||event.recordedAt!==row.recorded_at||this.mutationScope(row.operation)!==row.scope||!/^[a-f0-9]{64}$/.test(row.payload_hash??'')||!Number.isInteger(row.http_status)||row.http_status<400||row.http_status>499)throw Error('Production rejection event differs');
+      }
+      const manifest=JSON.stringify({count:rows.length,sha256:digest(rows)}),saved=this.db.prepare("SELECT value FROM meta WHERE key='productionMutationManifest:v1'").get();
+      if(saved&&(!marker||saved.value!==manifest))throw Error('Production rejection manifest differs');
+      if(marker&&!saved)throw Error('Production rejection manifest is missing after migration');
+      if(!marker)this.db.prepare("INSERT INTO meta(key,value) VALUES('productionMutationRejections:v1','done')").run();
+      if(!saved)this.db.prepare("INSERT INTO meta(key,value) VALUES('productionMutationManifest:v1',?)").run(manifest);
+  }
+  updateMutationRejectionManifest(){const rows=this.db.prepare('SELECT * FROM production_mutation_rejections ORDER BY session_id,scope,request_id').all(),result=this.db.prepare("UPDATE meta SET value=? WHERE key='productionMutationManifest:v1'").run(JSON.stringify({count:rows.length,sha256:digest(rows)}));if(result.changes!==1)throw Error('Production rejection manifest is missing');}
+  mutationScope(operation){if(operation==='create')return 'create';if(operation==='asset-import')return 'asset-import';if(['render','prepared-render'].includes(operation))return 'render';if(operation==='cancel')return 'cancel';if(['evaluate','iteration','feedback'].includes(operation))return 'action';if(/^(moss|qwen)-pe-(start|decision|reconcile)$/.test(operation))return 'pe-'+operation.split('-').at(-1);throw new ApiError(400,'操作が不正です。');}
+  mutationFenceInput(session,operation,targetId,input){
+    validateSession(session);const scope=this.mutationScope(operation);
+    if(typeof input?.requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(input.requestId)||(['create','asset-import'].includes(scope)?targetId!==null:typeof targetId!=='string'||!uuid.test(targetId)))throw new ApiError(400,'拒否証拠の識別子が不正です。');
+    return {sessionId:session,scope,requestId:input.requestId,operation,targetId,payloadHash:digest(input)};
+  }
+  assertMutationNotRejected(session,scope,requestId){
+    if(this.db.prepare('SELECT 1 FROM production_mutation_rejections WHERE session_id=? AND scope=? AND request_id=?').get(session,scope,requestId))throw new ApiError(409,'この要求IDは受付前拒否で閉じられています。照合してください。');
+  }
+  hasMutationAdmission(session,scope,requestId){
+    if(scope==='create')return Boolean(this.db.prepare('SELECT 1 FROM productions WHERE session_id=? AND request_id=?').get(session,requestId));
+    if(scope==='asset-import'){
+      if(!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='asset_import_receipts'").get())throw new ApiError(503,'画像受付台帳を確認できません。');
+      return Boolean(this.db.prepare('SELECT 1 FROM asset_import_receipts WHERE session_id=? AND request_id=?').get(session,requestId));
+    }
+    if(scope==='pe-start'||scope==='render')return Boolean(this.db.prepare('SELECT 1 FROM runs WHERE request_id=?').get(requestId));
+    if(scope==='cancel')return Boolean(this.db.prepare('SELECT 1 FROM production_cancel_receipts WHERE session_id=? AND request_id=?').get(session,requestId));
+    if(scope==='pe-decision'||scope==='pe-reconcile'){
+      const table=scope==='pe-decision'?'pe_decision_receipts':'pe_reconcile_receipts';
+      if(!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))throw new ApiError(503,'PE受付台帳を確認できません。');
+      return Boolean(this.db.prepare(`SELECT 1 FROM ${table} WHERE session_id=? AND request_id=?`).get(session,requestId));
+    }
+    if(this.db.prepare('SELECT 1 FROM production_action_receipts WHERE session_id=? AND request_id=?').get(session,requestId))return true;
+    // Old feedback could use a current-format request ID without a receipt.
+    // Such an ID remains possibly admitted even after the new tables exist.
+    for(const row of this.db.prepare('SELECT json FROM productions WHERE session_id=?').all(session)){
+      let p;try{p=JSON.parse(row.json);}catch{throw new ApiError(503,'過去の制作記録を確認できません。');}
+      if((p.feedbackRequests??[]).some(item=>item?.requestId===requestId))return true;
+    }
+    return false;
+  }
+  rejectionEvidence(row,session,operation,requestId){
+    const scope=this.mutationScope(operation),event=this.db.prepare('SELECT run_id,type,json FROM events WHERE seq=?').get(row?.event_seq);let data;try{data=JSON.parse(event?.json);}catch{}
+    if(!row||row.session_id!==session||row.scope!==scope||row.request_id!==requestId||row.operation!==operation||!/^[a-f0-9]{64}$/.test(row.payload_hash??'')||!Number.isInteger(row.http_status)||row.http_status<400||row.http_status>499||typeof row.recorded_at!=='string'||!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.recorded_at)||!Number.isFinite(Date.parse(row.recorded_at))||new Date(row.recorded_at).toISOString()!==row.recorded_at||!(['create','asset-import'].includes(scope)?row.target_id===null:typeof row.target_id==='string'&&uuid.test(row.target_id))||!event||event.run_id!==(row.target_id??requestId)||event.type!=='production_mutation_rejected'||data?.sessionId!==session||data?.operation!==operation||data?.requestId!==requestId||data?.payloadHash!==row.payload_hash||data?.targetId!==row.target_id||data?.httpStatus!==row.http_status||data?.recordedAt!==row.recorded_at)throw new ApiError(503,'拒否証拠を確認できません。');
+    const accepted=this.hasMutationAdmission(session,scope,requestId);
+    if(accepted)throw new ApiError(503,'受付と拒否の記録が競合しています。');
+    return {operation,sessionId:session,requestId,payloadHash:row.payload_hash,targetId:row.target_id,state:'rejected',reason:'rejected-before-admission',httpStatus:row.http_status,recordedAt:row.recorded_at};
+  }
+  findMutationRejection(session,operation,requestId){
+    validateSession(session);const scope=this.mutationScope(operation);if(typeof requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(requestId))throw new ApiError(400,'要求IDが不正です。');
+    this.db.exec('BEGIN');try{const row=this.db.prepare('SELECT * FROM production_mutation_rejections WHERE session_id=? AND scope=? AND request_id=?').get(session,scope,requestId);if(!row)throw new ApiError(404,'拒否は未観測です。未受付の証明ではありません。');const receipt=this.rejectionEvidence(row,session,operation,requestId);this.db.exec('COMMIT');return {receipt};}catch(error){this.db.exec('ROLLBACK');throw error;}
+  }
+  rejectUnadmittedMutation(session,operation,targetId,input,status){
+    const identity=this.mutationFenceInput(session,operation,targetId,input),{scope,requestId,payloadHash}=identity;if(!Number.isInteger(status)||status<400||status>499)throw new ApiError(400,'拒否状態が不正です。');
+    return this.store.transaction(()=>{
+      const accepted=this.hasMutationAdmission(session,scope,requestId);
+      if(accepted)throw new ApiError(503,'要求は受付済みの可能性があります。');
+      const old=this.db.prepare('SELECT * FROM production_mutation_rejections WHERE session_id=? AND scope=? AND request_id=?').get(session,scope,requestId);
+      if(old){if(old.operation!==operation||old.target_id!==targetId||old.payload_hash!==payloadHash)throw new ApiError(503,'既存の要求証拠と一致しません。');return this.rejectionEvidence(old,session,operation,requestId);}
+      const recordedAt=new Date().toISOString(),eventData={sessionId:session,requestId,operation,targetId,payloadHash,httpStatus:status,recordedAt};
+      this.store.event(targetId??requestId,'production_mutation_rejected',eventData);const seq=this.db.prepare('SELECT last_insert_rowid() AS value').get().value;
+      this.db.prepare('INSERT INTO production_mutation_rejections VALUES(?,?,?,?,?,?,?,?,?)').run(session,scope,requestId,operation,targetId,payloadHash,status,recordedAt,seq);
+      this.updateMutationRejectionManifest();
+      return {operation,sessionId:session,requestId,payloadHash,targetId,state:'rejected',reason:'rejected-before-admission',httpStatus:status,recordedAt};
+    });
   }
   get(id,session) {
     const row=this.db.prepare('SELECT session_id,json FROM productions WHERE id=?').get(id);
@@ -56,14 +197,88 @@ export class ProductionStore {
     validateSession(session);
     return (requestId?this.db.prepare('SELECT json FROM productions WHERE session_id=? AND request_id=?').all(session,requestId):this.db.prepare('SELECT json FROM productions WHERE session_id=? ORDER BY rowid DESC LIMIT 50').all(session)).map(row=>JSON.parse(row.json));
   }
+  // Only a single authenticated, durable cancellation immediately following
+  // the original event can explain a one-revision advance. Must be called in
+  // the same read/write transaction as the original evidence lookup.
+  cancellationAfterEventInTransaction(p,session,baseRevision,baseEventSeq) {
+    if(!p||p.sessionId!==session||!Number.isSafeInteger(baseRevision)||baseRevision<0||p.revision!==baseRevision+1||p.cancelRequested!==true||!Number.isSafeInteger(baseEventSeq)||baseEventSeq<1)return null;
+    const rows=this.db.prepare('SELECT request_id,event_seq FROM production_cancel_receipts WHERE session_id=? AND production_id=?').all(session,p.id);
+    if(rows.length!==1)return null;
+    const events=this.db.prepare('SELECT seq,type,json FROM events WHERE run_id=? AND seq>? ORDER BY seq').all(p.id,baseEventSeq);
+    if(events.length!==2||events[0].type!=='production_cancelled'||events[1].type!=='production_cancel_receipt'||events[1].seq!==rows[0].event_seq)return null;
+    let cancelled;try{cancelled=JSON.parse(events[0].json);}catch{return null;}
+    if(cancelled?.revision!==p.revision)return null;
+    let result;try{result=this.cancelReceiptInTransaction(p.id,session,rows[0].request_id);}catch(error){if(error instanceof ApiError&&[404,409].includes(error.status))return null;throw error;}
+    const r=result.receipt;
+    if(r.disposition!=='accepted'||r.previousRevision!==baseRevision||r.productionRevision!==p.revision||r.sessionId!==session||r.productionId!==p.id||!['cancel','cancel-owned'].includes(r.operation))return null;
+    return r;
+  }
+  listWithCancellationEvidence(session,requestId) {
+    this.db.exec('BEGIN');
+    try{
+      const productions=this.list(session,requestId),out={productions};
+      if(typeof requestId==='string'&&productions.length)this.assertMutationNotRejected(session,'create',requestId);
+      if(typeof requestId==='string'&&productions.length===1){
+        const p=productions[0],stored=this.db.prepare('SELECT session_id,request_id,payload_hash FROM productions WHERE id=?').get(p.id);
+        const events=this.db.prepare("SELECT seq,json FROM events WHERE run_id=? AND type='production_created' ORDER BY seq").all(p.id);
+        let created;try{created=events.length===1?JSON.parse(events[0].json):null;}catch{}
+        if(p.sessionId===session&&p.requestId===requestId&&stored?.session_id===session&&stored.request_id===requestId&&stored.payload_hash===p.briefHash&&digest(p.brief)===p.briefHash&&created?.briefHash===p.briefHash){
+          const cancellationReceipt=this.cancellationAfterEventInTransaction(p,session,0,events[0].seq);
+          if(cancellationReceipt)out.cancellationReceipt=cancellationReceipt;
+        }
+      }
+      this.db.exec('COMMIT');return out;
+    }catch(error){this.db.exec('ROLLBACK');throw error;}
+  }
   findRenderByRequest(id,session,requestId) {
+    this.db.exec('BEGIN');
+    try{const result=this.findRenderByRequestInTransaction(id,session,requestId);this.db.exec('COMMIT');return result;}
+    catch(error){this.db.exec('ROLLBACK');throw error;}
+  }
+  findRenderByRequestInTransaction(id,session,requestId) {
     const production=this.get(id,session);
     if(typeof requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(requestId))throw new ApiError(400,'生成要求IDが不正です。');
-    const row=this.db.prepare('SELECT json FROM runs WHERE request_id=?').get(requestId);
+    const row=this.db.prepare('SELECT id,payload_hash,phase,json FROM runs WHERE request_id=?').get(requestId);
     if(!row)throw new ApiError(404,'生成要求を確認できません。未存在は送信失敗の証明ではありません。');
+    this.assertMutationNotRejected(session,'render',requestId);
     const run=JSON.parse(row.json);
     if(run.requestId!==requestId||run.sessionId!==session||run.productionId!==id||typeof run.id!=='string'||!Array.isArray(production.attempts)||!production.attempts.includes(run.id))throw new ApiError(404,'この会話の制作に属する生成要求を確認できません。');
-    return {run,production};
+    let cancellationReceipt;
+    const legacy=this.db.prepare('SELECT * FROM legacy_render_receipts WHERE session_id=? AND request_id=?').get(session,requestId);
+    if(legacy){
+      const spec=run.spec,w=spec?.workflow,effective=Object.hasOwn(run,'effectiveSpec')?run.effectiveSpec:spec,stored=this.db.prepare('SELECT session_id,request_id,payload_hash FROM productions WHERE id=?').get(id);
+      const created=this.db.prepare("SELECT seq,json FROM events WHERE run_id=? AND type='production_created'").all(id),runCreated=this.db.prepare("SELECT seq,json FROM events WHERE run_id=? AND type='created'").all(run.id),event=this.db.prepare('SELECT run_id,type,json FROM events WHERE seq=?').get(legacy.event_seq),requested=this.db.prepare("SELECT seq,json FROM events WHERE run_id=? AND type='render_requested'").all(id),enhanced=this.db.prepare("SELECT json FROM events WHERE run_id=? AND type='prompt_enhanced'").all(run.id);
+      let creation,createdRun,renderEvent;try{if(created.length===1)creation=JSON.parse(created[0].json);if(runCreated.length===1)createdRun=JSON.parse(runCreated[0].json);renderEvent=JSON.parse(event?.json);}catch{}
+      const matchingRequested=requested.filter(item=>{try{return JSON.parse(item.json)?.runId===run.id;}catch{return false;}});
+      let valid=false;
+      try{
+        const fixed=x=>Object.fromEntries(Object.entries(x).filter(([key])=>!['prompt','negativePrompt'].includes(key)));
+        valid=legacy.production_id===id&&legacy.run_id===run.id&&legacy.session_id===session&&legacy.request_id===requestId&&/^[a-f0-9]{64}$/.test(legacy.payload_hash??'')&&Number.isSafeInteger(legacy.expected_revision)&&legacy.expected_revision>=0&&legacy.production_revision===legacy.expected_revision+1&&legacy.production_revision===run.productionRevision&&production.id===id&&production.sessionId===session&&production.brief&&digest(production.brief)===production.briefHash&&stored?.session_id===session&&stored.request_id===production.requestId&&stored.payload_hash===production.briefHash&&created.length===1&&creation?.briefHash===production.briefHash&&created[0].seq<legacy.event_seq&&
+          run.id===row.id&&row.phase===run.phase&&run.controllerId===this.store.controllerId&&run.sessionId===session&&run.productionId===id&&run.requestId===requestId&&spec&&effective&&typeof spec==='object'&&typeof effective==='object'&&row.payload_hash===digest(spec)&&run.specHash===digest(effective)&&JSON.stringify(fixed(spec))===JSON.stringify(fixed(effective))&&spec.briefHash===production.briefHash&&spec.assetSessionId===session&&typeof spec.enhancer==='boolean'&&spec.modelProfile===production.brief.modelProfile&&w&&w.productionId===id&&w.id===legacy.workflow_id&&w.sha256===legacy.workflow_hash&&workflowGraphHash(w.graph)===w.sha256&&w.modelProfile===spec.modelProfile&&!officialInputProfile(w.modelProfile)&&production.workflowId===w.id&&production.workflowSha256===w.sha256&&production.latestRunId===run.id&&production.attempts.at(-1)===run.id&&production.attempts.filter(x=>x===run.id).length===1&&run.attempt===production.attempts.length&&runCreated.length===1&&createdRun?.specHash===row.payload_hash&&runCreated[0].seq>legacy.event_seq&&matchingRequested.length===1&&matchingRequested[0].seq===legacy.event_seq&&event?.run_id===id&&event.type==='render_requested'&&renderEvent?.runId===run.id&&renderEvent.revision===legacy.production_revision&&renderEvent.attempt===production.attempts.length;
+        if(valid&&Object.hasOwn(run,'effectiveSpec')){
+          let detail;try{if(enhanced.length===1)detail=JSON.parse(enhanced[0].json);}catch{}
+          valid=spec.enhancer===true&&run.enhancerStartIntent?.id===run.enhancerCleanup?.intentId&&run.enhancerCleanup?.confirmed===true&&run.enhancerCleanup?.childExited===true&&run.enhancement?.childExited===true&&run.enhancement?.cleanupConfirmed===true&&enhanced.length===1&&detail?.specHash===run.specHash&&digest(detail?.effectiveSpec)===run.specHash&&digest(detail?.enhancement)===digest(run.enhancement);
+        }else if(valid)valid=enhanced.length===0&&!(spec.enhancer===true&&(run.phase==='completed'||run.promptId!=null));
+      }catch{valid=false;}
+      if(!valid)throw new ApiError(409,'保存済み旧形式生成と受付が一致しません。再送せず保留してください。');
+      if(production.revision!==legacy.production_revision){cancellationReceipt=this.cancellationAfterEventInTransaction(production,session,legacy.production_revision,legacy.event_seq);if(!cancellationReceipt)throw new ApiError(409,'旧形式生成後の制作状態を確認できません。再送せず保留してください。');}
+      else if(production.cancelRequested!==false||run.cancelRequested!==false)throw new ApiError(409,'旧形式生成の停止状態が一致しません。再送せず保留してください。');
+      return {run,production,receipt:{requestId,sessionId:session,productionId:id,runId:run.id,payloadHash:legacy.payload_hash,originalSpecHash:row.payload_hash,effectiveSpecPresent:Object.hasOwn(run,'effectiveSpec'),effectiveSpecHash:Object.hasOwn(run,'effectiveSpec')?run.specHash:null,expectedRevision:legacy.expected_revision,productionRevision:legacy.production_revision,workflowId:legacy.workflow_id,workflowHash:legacy.workflow_hash},...(cancellationReceipt?{cancellationReceipt}:{})};
+    }
+    // Continuity is deliberately limited to official prepared runs whose
+    // immutable request, graph and production binding can all be checked.
+    if(production.cancelRequested===true&&production.revision===run.productionRevision+1){
+      const spec=run.spec,w=spec?.workflow,req=w?.request,out=w?.output;
+      let valid=false;
+      try{
+        valid=production.id===id&&production.sessionId===session&&production.brief&&digest(production.brief)===production.briefHash&&row.id===run.id&&row.payload_hash===run.specHash&&digest(spec)===run.specHash&&Number.isSafeInteger(run.productionRevision)&&run.productionRevision>=1&&typeof run.cancelRequested==='boolean'&&production.latestRunId===run.id&&production.attempts.at(-1)===run.id&&production.attempts.filter(x=>x===run.id).length===1&&spec.assetSessionId===session&&spec.briefHash===production.briefHash&&spec.enhancer===false&&spec.modelProfile===production.brief.modelProfile&&[4,5].includes(w?.schemaVersion)&&officialInputProfile(w.modelProfile)&&w.productionId===id&&w.id===production.workflowId&&w.sha256===production.workflowSha256&&workflowGraphHash(w.graph)===w.sha256&&w.modelProfile===production.brief.modelProfile&&w.mode===(production.brief.mode??'t2i')&&req&&out&&spec.prompt===req.prompt&&spec.negativePrompt===(req.negativePrompt??'')&&spec.seed===(req.seed??'42')&&spec.width===out.width&&spec.height===out.height&&spec.steps===(req.steps??(w.schemaVersion===5&&req.variant==='turbo'?8:w.mode==='edit'&&w.schemaVersion!==5?30:25))&&spec.mode===(production.brief.mode??'t2i')&&spec.inputAssetId===(production.brief.inputAssetId??null)&&JSON.stringify(spec.invariants)===JSON.stringify(production.brief.invariants)&&JSON.stringify(w.inputAssetIds)===JSON.stringify(production.brief.inputAssetIds??(production.brief.inputAssetId?[production.brief.inputAssetId]:[]))&&Array.isArray(spec.referenceAssets)&&JSON.stringify(spec.referenceAssets.map(x=>x.id))===JSON.stringify(production.brief.referenceAssetIds??[]);
+      }catch{valid=false;}
+      if(valid){
+        const rows=this.db.prepare("SELECT seq,json FROM events WHERE run_id=? AND type='render_requested' ORDER BY seq").all(id),matches=rows.filter(row=>{try{const e=JSON.parse(row.json);return e.revision===run.productionRevision&&e.runId===run.id&&e.attempt===production.attempts.length;}catch{return false;}});
+        if(matches.length===1)cancellationReceipt=this.cancellationAfterEventInTransaction(production,session,run.productionRevision,matches[0].seq);
+      }
+    }
+    return {run,production,...(cancellationReceipt?{cancellationReceipt}:{})};
   }
   listAll() {
     return this.db.prepare('SELECT json FROM productions ORDER BY rowid DESC LIMIT 50').all().map(row=>{
@@ -132,6 +347,7 @@ export class ProductionStore {
     const requestId=text(input.requestId,160,'requestId'),brief=validateBrief({...input.brief,modelProfile:input.modelProfile??input.brief?.modelProfile??this.defaultModelProfile}),hash=digest(brief);
     for(const [id,kind] of [[brief.inputAssetId,'input'],...(brief.inputAssetIds??[]).map(id=>[id,'input']),...(brief.peInputAssetIds??[]).map(id=>[id,'input']),...brief.referenceAssetIds.map(id=>[id,'reference'])])if(id){if(!this.assets||this.assets.get(id,session).purpose!==kind)throw new ApiError(409,'画像がこの会話に属していないか、登録用途が一致しません。');}
     return this.store.transaction(()=>{
+      this.assertMutationNotRejected(session,'create',requestId);
       const existing=this.db.prepare('SELECT json,payload_hash FROM productions WHERE session_id=? AND request_id=?').get(session,requestId);
       if(existing) {if(existing.payload_hash!==hash) throw new ApiError(409,'同じrequestIdの依頼内容を変更できません。');return {production:JSON.parse(existing.json),created:false};}
       if(this.db.prepare("SELECT request_id FROM workflow_preparations WHERE session_id=? AND state='started' LIMIT 1").get(session))throw new ApiError(409,'この会話のworkflow要求は結果未確認です。新しい制作を開始せず照合してください。');
@@ -142,6 +358,105 @@ export class ProductionStore {
       this.store.event(production.id,'production_created',{briefHash:hash});
       return {production,created:true};
     });
+  }
+  // Reserve the exact incoming request before any workflow validation or
+  // asset-cache access. The table itself is the workflow-draft operation
+  // namespace. An unknown or already accepted request is never dispatched a
+  // second time, including by a late request from another Controller process.
+  reserveWorkflowPreparation(session,input) {
+    validateSession(session);
+    if(!input||typeof input!=='object'||Array.isArray(input)||typeof input.requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(input.requestId)||typeof input.productionId!=='string'||!uuid.test(input.productionId.toLowerCase())||!Number.isSafeInteger(input.expectedRevision)||input.expectedRevision<0)throw new ApiError(400,'workflow要求ID、制作ID、revisionが不正です。');
+    const payloadHash=digest(input);
+    return this.store.transaction(()=>{
+      const old=this.db.prepare('SELECT * FROM workflow_preparations WHERE session_id=? AND request_id=?').get(session,input.requestId);
+      if(old){
+        if(old.production_id!==input.productionId||old.payload_hash!==payloadHash||old.expected_revision!==input.expectedRevision)throw new ApiError(409,'同じworkflow要求IDの対象や内容を変更できません。');
+        return {requestId:input.requestId,payloadHash,admitted:false,state:old.state};
+      }
+      const pending=this.db.prepare("SELECT request_id FROM workflow_preparations WHERE session_id=? AND state='started' LIMIT 1").get(session);
+      this.db.prepare('INSERT INTO workflow_preparations(session_id,request_id,production_id,payload_hash,expected_revision,state) VALUES (?,?,?,?,?,?)').run(session,input.requestId,input.productionId,payloadHash,input.expectedRevision,'started');
+      this.updateProductionReceiptsManifest();
+      if(pending){
+        const receipt=this.rejectWorkflowPreparationInTransaction(session,input.requestId,input.productionId,payloadHash,input.expectedRevision,409);
+        return {requestId:input.requestId,payloadHash,admitted:false,state:'rejected',receipt};
+      }
+      return {requestId:input.requestId,payloadHash,admitted:true,state:'started'};
+    });
+  }
+  confirmWorkflowPreparation(id,session,revision,preparation) {
+    return this.store.transaction(()=>{
+      const p=this.get(id,session),r=this.db.prepare('SELECT * FROM workflow_preparations WHERE session_id=? AND request_id=?').get(session,preparation?.requestId);
+      if(!r||r.production_id!==id||r.payload_hash!==preparation?.payloadHash||r.expected_revision!==revision||r.state!=='started')throw new ApiError(409,'workflow受付が変更されたため保存できません。');
+      this.check(p,revision,{allowedPreparation:preparation.requestId});
+      return true;
+    });
+  }
+  rejectWorkflowPreparationInTransaction(session,requestId,id,payloadHash,expectedRevision,status) {
+    if(!Number.isInteger(status)||status<400||status>499)throw Error('Invalid workflow rejection status');
+    const row=this.db.prepare('SELECT * FROM workflow_preparations WHERE session_id=? AND request_id=?').get(session,requestId);
+    if(!row||row.production_id!==id||row.payload_hash!==payloadHash||row.expected_revision!==expectedRevision||row.state!=='started'||row.workflow_id!==null||row.workflow_hash!==null||row.snapshot_hash!==null)throw new ApiError(409,'workflow受付状態が変わったため拒否を確定できません。');
+    const receipt={operation:'workflow-draft',sessionId:session,requestId,productionId:id,payloadHash,expectedRevision,state:'rejected',httpStatus:status,reason:'rejected-before-workflow-write',inputCacheMayExist:true,recordedAt:new Date().toISOString()};
+    this.db.prepare('INSERT INTO workflow_preparation_rejections VALUES(?,?,?,?,?,?,?,?)').run(session,requestId,id,payloadHash,expectedRevision,status,JSON.stringify(receipt),digest(receipt));
+    const changed=this.db.prepare("UPDATE workflow_preparations SET state='rejected' WHERE session_id=? AND request_id=? AND production_id=? AND payload_hash=? AND expected_revision=? AND state='started'").run(session,requestId,id,payloadHash,expectedRevision);
+    if(changed.changes!==1)throw new ApiError(409,'workflow受付状態が変わったため拒否を確定できません。');
+    this.updateProductionReceiptsManifest();
+    return receipt;
+  }
+  rejectWorkflowPreparation(session,id,input,preparation,status) {
+    return this.store.transaction(()=>this.rejectWorkflowPreparationInTransaction(session,preparation.requestId,id,preparation.payloadHash,input.expectedRevision,status));
+  }
+  abandonWorkflowFence(session,input) {
+    validateSession(session);
+    if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).sort().join(',')!=='expectedRevision,payloadHash,productionId,requestId'||typeof input.requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(input.requestId)||typeof input.productionId!=='string'||!uuid.test(input.productionId.toLowerCase())||typeof input.payloadHash!=='string'||!/^[a-f0-9]{64}$/.test(input.payloadHash)||!Number.isSafeInteger(input.expectedRevision)||input.expectedRevision<0)throw new ApiError(400,'受付ID、対象、payload hashとrevisionを指定してください。');
+    return this.store.transaction(()=>{
+      const row=this.db.prepare('SELECT * FROM workflow_preparations WHERE session_id=? AND request_id=?').get(session,input.requestId);
+      if(!row||row.production_id!==input.productionId||row.payload_hash!==input.payloadHash||row.expected_revision!==input.expectedRevision)throw new ApiError(404,'この会話のworkflow受付を確認できません。');
+      const previous=this.db.prepare('SELECT * FROM workflow_request_fence_abandons WHERE session_id=? AND request_id=?').get(session,input.requestId);
+      if(row.state==='abandoned'){
+        let receipt;try{receipt=JSON.parse(previous?.receipt_json);}catch{}
+        if(!previous||!receipt||previous.production_id!==input.productionId||previous.payload_hash!==input.payloadHash||previous.expected_revision!==input.expectedRevision||digest(receipt)!==previous.receipt_hash||receipt.operation!=='workflow-draft'||receipt.sessionId!==session||receipt.requestId!==input.requestId||receipt.productionId!==input.productionId||receipt.payloadHash!==input.payloadHash||receipt.expectedRevision!==input.expectedRevision||receipt.state!=='abandoned'||receipt.reason!=='fenced-against-binding'||receipt.workflowFileMayExist!==true||receipt.inputCacheMayExist!==true||typeof receipt.recordedAt!=='string')throw new ApiError(409,'以前のworkflow放棄記録を確認できません。');
+        return {receipt,created:false};
+      }
+      if(row.state!=='started'||previous||row.workflow_id!==null||row.workflow_hash!==null||row.snapshot_hash!==null)throw new ApiError(409,'workflow受付状態が変わりました。再読取して確認してください。');
+      const receipt={operation:'workflow-draft',sessionId:session,requestId:input.requestId,productionId:input.productionId,payloadHash:input.payloadHash,expectedRevision:input.expectedRevision,state:'abandoned',reason:'fenced-against-binding',workflowFileMayExist:true,inputCacheMayExist:true,recordedAt:new Date().toISOString()};
+      this.db.prepare('INSERT INTO workflow_request_fence_abandons VALUES(?,?,?,?,?,?,?)').run(session,input.requestId,input.productionId,input.payloadHash,input.expectedRevision,JSON.stringify(receipt),digest(receipt));
+      const changed=this.db.prepare("UPDATE workflow_preparations SET state='abandoned' WHERE session_id=? AND request_id=? AND production_id=? AND payload_hash=? AND expected_revision=? AND state='started'").run(session,input.requestId,input.productionId,input.payloadHash,input.expectedRevision);
+      if(changed.changes!==1)throw new ApiError(409,'workflow受付状態が変わりました。');
+      this.updateProductionReceiptsManifest();
+      return {receipt,created:true};
+    });
+  }
+  inspectWorkflowRequest(session,requestId) {
+    validateSession(session);
+    if(typeof requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(requestId))throw new ApiError(400,'workflow要求IDが不正です。');
+    this.db.exec('BEGIN');
+    try{
+      const row=this.db.prepare('SELECT * FROM workflow_preparations WHERE session_id=? AND request_id=?').get(session,requestId);
+      if(!row)throw new ApiError(404,'workflow要求は未観測です。未実行の証明ではありません。');
+      if(!['started','rejected','committed','abandoned'].includes(row.state)||row.session_id!==session||row.request_id!==requestId||typeof row.production_id!=='string'||!uuid.test(row.production_id.toLowerCase())||!/^[a-f0-9]{64}$/.test(row.payload_hash??'')||!Number.isSafeInteger(row.expected_revision)||row.expected_revision<0)throw new ApiError(409,'workflow受付情報を確認できません。');
+      if(row.state!=='committed'&&(row.workflow_id!==null||row.workflow_hash!==null||row.snapshot_hash!==null))throw new ApiError(409,'未確定のworkflow受付に保存済み条件があります。');
+      const rejected=this.db.prepare('SELECT * FROM workflow_preparation_rejections WHERE session_id=? AND request_id=?').get(session,requestId);
+      const fencedAbandon=this.db.prepare('SELECT * FROM workflow_request_fence_abandons WHERE session_id=? AND request_id=?').get(session,requestId);
+      const legacyAbandon=this.db.prepare('SELECT * FROM workflow_preparation_abandons WHERE session_id=? AND request_id=?').get(session,requestId);
+      let receipt={operation:'workflow-draft',sessionId:session,requestId,productionId:row.production_id,payloadHash:row.payload_hash,expectedRevision:row.expected_revision,state:row.state};
+      if(row.state==='rejected'){
+        let saved;try{saved=JSON.parse(rejected?.receipt_json);}catch{}
+        if(!rejected||!saved||rejected.production_id!==row.production_id||rejected.payload_hash!==row.payload_hash||rejected.expected_revision!==row.expected_revision||rejected.http_status!==saved.httpStatus||!Number.isInteger(saved.httpStatus)||saved.httpStatus<400||saved.httpStatus>499||saved.operation!==receipt.operation||saved.sessionId!==session||saved.requestId!==requestId||saved.productionId!==row.production_id||saved.payloadHash!==row.payload_hash||saved.expectedRevision!==row.expected_revision||saved.state!=='rejected'||saved.reason!=='rejected-before-workflow-write'||saved.inputCacheMayExist!==true||typeof saved.recordedAt!=='string'||digest(saved)!==rejected.receipt_hash||row.workflow_id!==null||row.workflow_hash!==null||row.snapshot_hash!==null)throw new ApiError(409,'workflow拒否記録を確認できません。');
+        receipt=saved;
+      }else if(rejected)throw new ApiError(409,'workflow受付と拒否記録が一致しません。');
+      if(row.state==='abandoned'){
+        if(Boolean(fencedAbandon)===Boolean(legacyAbandon))throw new ApiError(409,'workflow放棄記録を一意に確認できません。');
+        if(fencedAbandon){
+          let saved;try{saved=JSON.parse(fencedAbandon.receipt_json);}catch{}
+          if(!saved||fencedAbandon.production_id!==row.production_id||fencedAbandon.payload_hash!==row.payload_hash||fencedAbandon.expected_revision!==row.expected_revision||saved.operation!=='workflow-draft'||saved.sessionId!==session||saved.requestId!==requestId||saved.productionId!==row.production_id||saved.payloadHash!==row.payload_hash||saved.expectedRevision!==row.expected_revision||saved.state!=='abandoned'||saved.reason!=='fenced-against-binding'||saved.workflowFileMayExist!==true||saved.inputCacheMayExist!==true||typeof saved.recordedAt!=='string'||digest(saved)!==fencedAbandon.receipt_hash)throw new ApiError(409,'workflow放棄記録を確認できません。');
+          receipt=saved;
+        }else{
+          if(legacyAbandon.production_id!==row.production_id||legacyAbandon.payload_hash!==row.payload_hash||legacyAbandon.expected_revision!==row.expected_revision||!Number.isSafeInteger(legacyAbandon.observed_revision)||typeof legacyAbandon.created_at!=='string')throw new ApiError(409,'workflow放棄記録を確認できません。');
+          receipt={...receipt,reason:'fenced-against-binding',workflowFileMayExist:true,inputCacheMayExist:true,recordedAt:legacyAbandon.created_at};
+        }
+      }else if(fencedAbandon||legacyAbandon)throw new ApiError(409,'workflow受付と放棄記録が一致しません。');
+      this.db.exec('COMMIT');return {receipt};
+    }catch(error){this.db.exec('ROLLBACK');throw error;}
   }
   beginWorkflowPreparation(id,session,input) {
     const requestId=input?.requestId;
@@ -154,6 +469,7 @@ export class ProductionStore {
         if(this.db.prepare('SELECT request_id FROM workflow_preparations WHERE session_id=? AND request_id=?').get(session,requestId))throw new ApiError(409,'このworkflow要求は受付済みまたは結果未確認です。再送せず照合してください。');
       } catch(error) {if(error instanceof ApiError&&error.status>=400&&error.status<500)error[definiteWorkflowRejection]=true;throw error;}
       this.db.prepare('INSERT INTO workflow_preparations(session_id,request_id,production_id,payload_hash,expected_revision,state) VALUES (?,?,?,?,?,?)').run(session,requestId,id,payloadHash,input.expectedRevision,'started');
+      this.updateProductionReceiptsManifest();
       return {requestId,payloadHash};
     });
   }
@@ -162,11 +478,128 @@ export class ProductionStore {
     if(pending)throw new ApiError(409,'workflow要求の結果が未確認です。再送や制作変更を行わず照合してください。');
   }
   findWorkflowPreparation(id,session,requestId) {
+    this.db.exec('BEGIN');
+    try{const result=this.findWorkflowPreparationInTransaction(id,session,requestId);this.db.exec('COMMIT');return result;}
+    catch(error){this.db.exec('ROLLBACK');throw error;}
+  }
+  findWorkflowPreparationInTransaction(id,session,requestId) {
     const p=this.get(id,session);
     if(typeof requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(requestId))throw new ApiError(400,'workflow要求IDが不正です。');
     const r=this.db.prepare('SELECT * FROM workflow_preparations WHERE session_id=? AND request_id=?').get(session,requestId);
-    if(!r||r.production_id!==id||r.state!=='committed'||p.workflowId!==r.workflow_id||p.workflowSha256!==r.workflow_hash||p.revision!==r.expected_revision+1)throw new ApiError(409,'workflow要求の結果を確認できません。再送せず保留してください。');
-    return {production:p,receipt:{requestId:r.request_id,productionId:r.production_id,payloadHash:r.payload_hash,expectedRevision:r.expected_revision,workflowId:r.workflow_id,workflowHash:r.workflow_hash,snapshotHash:r.snapshot_hash}};
+    const stored=this.db.prepare('SELECT session_id,request_id,payload_hash FROM productions WHERE id=?').get(id);
+    const createdRows=this.db.prepare("SELECT seq,json FROM events WHERE run_id=? AND type='production_created' ORDER BY seq").all(id);
+    let created;try{created=createdRows.length===1?JSON.parse(createdRows[0].json):null;}catch{}
+    if(!r||r.production_id!==id||r.state!=='committed'||p.id!==id||p.sessionId!==session||stored?.session_id!==session||stored.request_id!==p.requestId||!p.brief||typeof p.brief!=='object'||Array.isArray(p.brief)||digest(p.brief)!==p.briefHash||stored.payload_hash!==p.briefHash||created?.briefHash!==p.briefHash||!Number.isSafeInteger(r.expected_revision)||r.expected_revision<0||!/^[a-f0-9]{64}$/.test(r.payload_hash??'')||!/^[a-f0-9]{64}$/.test(r.workflow_hash??'')||!/^[a-f0-9]{64}$/.test(r.snapshot_hash??'')||p.workflowId!==r.workflow_id||p.workflowSha256!==r.workflow_hash)throw new ApiError(409,'workflow要求の結果を確認できません。再送せず保留してください。');
+    const rows=this.db.prepare("SELECT seq,json FROM events WHERE run_id=? AND type='workflow_selected' ORDER BY seq").all(id),matches=rows.filter(row=>{try{const e=JSON.parse(row.json);return e.revision===r.expected_revision+1&&e.workflowId===r.workflow_id&&e.sha256===r.workflow_hash;}catch{return false;}});
+    if(matches.length!==1||matches[0].seq<=createdRows[0].seq)throw new ApiError(409,'workflow選択の監査記録を確認できません。再送せず保留してください。');
+    let cancellationReceipt;
+    if(p.revision!==r.expected_revision+1){
+      cancellationReceipt=this.cancellationAfterEventInTransaction(p,session,r.expected_revision+1,matches[0].seq);
+      if(!cancellationReceipt)throw new ApiError(409,'workflow要求と停止後の状態を確認できません。再送せず保留してください。');
+    }
+    return {production:p,receipt:{requestId:r.request_id,productionId:r.production_id,payloadHash:r.payload_hash,expectedRevision:r.expected_revision,workflowId:r.workflow_id,workflowHash:r.workflow_hash,snapshotHash:r.snapshot_hash},...(cancellationReceipt?{cancellationReceipt}:{})};
+  }
+  actionReceiptInput(input) {
+    if(input?.requestId===undefined)return null;
+    if(typeof input.requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(input.requestId))throw new ApiError(400,'操作の要求IDが不正です。');
+    if(!Number.isSafeInteger(input.expectedRevision)||input.expectedRevision<0)throw new ApiError(400,'操作のrevisionが不正です。');
+    return {requestId:input.requestId,payloadHash:digest(input),expectedRevision:input.expectedRevision};
+  }
+  findActionByRequest(id,session,operation,requestId) {
+    // GET must see a single SQLite snapshot across the production, receipt,
+    // event, result and run reads. The replay path already owns a write
+    // transaction and calls the internal method directly to avoid nesting.
+    this.db.exec('BEGIN');
+    try{const result=this.findActionByRequestInTransaction(id,session,operation,requestId);this.db.exec('COMMIT');return result;}
+    catch(error){this.db.exec('ROLLBACK');throw error;}
+  }
+  assertActionEvaluationEvidence(p,id,session,evaluation) {
+    const evaluations=Array.isArray(p.evaluations)?p.evaluations.filter(item=>item?.id===evaluation?.id):[];
+    if(evaluations.length!==1||evaluation?.productionId!==id||evaluation.briefHash!==p.briefHash||!Array.isArray(p.attempts)||!p.attempts.includes(evaluation.runId))throw new ApiError(409,'評価と制作の証拠が一致しません。結果を保留してください。');
+    const row=this.db.prepare('SELECT production_id,run_id,json FROM evaluations WHERE id=?').get(evaluation.id);let saved;try{saved=JSON.parse(row?.json);}catch{}
+    if(!row||!saved||row.production_id!==id||row.run_id!==evaluation.runId||digest(saved)!==digest(evaluation))throw new ApiError(409,'保存済み評価が一致しません。結果を保留してください。');
+    const run=this.store.get(evaluation.runId),spec=run&&Object.hasOwn(run,'effectiveSpec')?run.effectiveSpec:run?.spec;
+    if(!run||run.id!==evaluation.runId||run.sessionId!==session||run.productionId!==id||!terminalPhases.has(run.phase)||run.specHash!==evaluation.specHash||!spec||typeof spec!=='object'||Array.isArray(spec)||digest(spec)!==run.specHash||spec.briefHash!==p.briefHash||!Array.isArray(run.artifacts)||!run.artifacts.some(artifact=>artifact.sha256===evaluation.artifactSha256))throw new ApiError(409,'評価対象の生成条件または成果物が一致しません。結果を保留してください。');
+  }
+  findActionByRequestInTransaction(id,session,operation,requestId) {
+    const p=this.get(id,session);
+    if(!['evaluate','iteration','feedback'].includes(operation)||typeof requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(requestId))throw new ApiError(400,'操作または要求IDが不正です。');
+    const row=this.db.prepare('SELECT * FROM production_action_receipts WHERE session_id=? AND request_id=?').get(session,requestId);
+    if(!row||row.production_id!==id||row.operation!==operation)throw new ApiError(404,'この操作の受付を確認できません。未観測は未実行の証明ではありません。');
+    this.assertMutationNotRejected(session,'action',requestId);
+    const field=operation==='evaluate'?'evaluation':operation==='iteration'?'plan':'feedback',items=operation==='evaluate'?p.evaluations:operation==='iteration'?p.iterationPlans:p.feedbackRequests;
+    const matches=Array.isArray(items)?items.filter(x=>x?.id===row.result_id):[];
+    const event=this.db.prepare('SELECT run_id,type,json FROM events WHERE seq=?').get(row.event_seq);
+    let eventData;try{eventData=JSON.parse(event?.json);}catch{}
+    // Subsequent rendering can add resultRunId to feedbackRequests. Receipt
+    // evidence is the immutable acceptance record retained in the event.
+    const saved=matches[0],result=operation==='feedback'&&saved?Object.fromEntries(Object.entries(saved).filter(([key])=>key!=='resultRunId')):saved;
+    const eventType=operation==='evaluate'?'image_evaluated':operation==='iteration'?'iteration_planned':'user_feedback_recorded';
+    if(p.id!==id||p.sessionId!==session||!p.brief||typeof p.brief!=='object'||Array.isArray(p.brief)||digest(p.brief)!==p.briefHash||!/^[a-f0-9]{64}$/.test(row.payload_hash??'')||!/^[a-f0-9]{64}$/.test(row.result_hash??'')||!Number.isSafeInteger(row.event_seq)||row.event_seq<1||matches.length!==1||!Number.isSafeInteger(row.expected_revision)||row.production_revision!==row.expected_revision+1||!Number.isSafeInteger(p.revision)||p.revision<row.production_revision||!event||event.run_id!==id||event.type!==eventType||eventData?.revision!==row.production_revision||!eventData[field]||digest(result)!==row.result_hash||digest(eventData[field])!==row.result_hash)throw new ApiError(409,'保存済み操作と監査記録が一致しません。結果を保留してください。');
+    if(operation==='evaluate'){
+      this.assertActionEvaluationEvidence(p,id,session,result);
+    }else if(operation==='iteration'){
+      const source=Array.isArray(p.evaluations)?p.evaluations.filter(item=>item?.runId===result.sourceRunId):[];
+      if(source.length!==1||source[0].specHash!==result.sourceSpecHash||source[0].artifactSha256!==result.sourceArtifactSha256)throw new ApiError(409,'改善計画の参照評価が一致しません。結果を保留してください。');
+      this.assertActionEvaluationEvidence(p,id,session,source[0]);
+    }else{
+      const origin=this.db.prepare('SELECT session_id,request_id,payload_hash FROM productions WHERE id=?').get(id);
+      const origins=this.db.prepare("SELECT seq,json FROM events WHERE run_id=? AND type='production_created'").all(id);let original;try{if(origins.length===1)original=JSON.parse(origins[0].json);}catch{}
+      if(!origin||origin.session_id!==session||origin.request_id!==p.requestId||origin.payload_hash!==p.briefHash||origins.length!==1||!Number.isSafeInteger(origins[0].seq)||origins[0].seq>=row.event_seq||original?.briefHash!==p.briefHash)throw new ApiError(409,'追加指示の制作受付を確認できません。結果を保留してください。');
+      if(result.requestId!==requestId||typeof result.feedback!=='string'||!result.feedback.trim()||digest({sourceRunId:result.sourceRunId,feedback:result.feedback})!==result.hash)throw new ApiError(409,'追加指示の保存内容が一致しません。結果を保留してください。');
+      for(const runId of new Set([result.sourceRunId,result.afterRunId])){
+        const source=Array.isArray(p.evaluations)?p.evaluations.filter(item=>item?.runId===runId):[];
+        if(source.length!==1||this.store.get(runId)?.phase!=='completed')throw new ApiError(409,'追加指示の参照評価が一致しません。結果を保留してください。');
+        this.assertActionEvaluationEvidence(p,id,session,source[0]);
+      }
+    }
+    const cancellationReceipt=p.revision!==row.production_revision?this.cancellationAfterEventInTransaction(p,session,row.production_revision,row.event_seq):null;
+    return {production:p,[field]:result,receipt:{requestId,operation,productionId:id,sessionId:session,payloadHash:row.payload_hash,expectedRevision:row.expected_revision,productionRevision:row.production_revision,resultId:row.result_id,resultHash:row.result_hash},...(cancellationReceipt?{cancellationReceipt}:{})};
+  }
+  existingActionReceipt(id,session,operation,proof) {
+    if(!proof)return null;
+    this.assertMutationNotRejected(session,'action',proof.requestId);
+    const row=this.db.prepare('SELECT production_id,operation,payload_hash,expected_revision FROM production_action_receipts WHERE session_id=? AND request_id=?').get(session,proof.requestId);
+    if(!row)return null;
+    if(row.production_id!==id||row.operation!==operation||row.payload_hash!==proof.payloadHash||row.expected_revision!==proof.expectedRevision)throw new ApiError(409,'同じ要求IDの操作または内容を変更できません。');
+    return {...this.findActionByRequestInTransaction(id,session,operation,proof.requestId),created:false};
+  }
+  saveActionReceipt(id,session,operation,proof,p,result) {
+    if(!proof)return null;
+    const eventSeq=this.db.prepare('SELECT last_insert_rowid() AS value').get().value;
+    if(!Number.isSafeInteger(eventSeq)||p.revision!==proof.expectedRevision+1)throw new Error('Operation receipt revision or event identity is unavailable');
+    this.db.prepare('INSERT INTO production_action_receipts VALUES(?,?,?,?,?,?,?,?,?,?)').run(session,proof.requestId,id,operation,proof.payloadHash,proof.expectedRevision,p.revision,result.id,digest(result),eventSeq);
+    this.updateProductionReceiptsManifest();
+    return {requestId:proof.requestId,operation,productionId:id,sessionId:session,payloadHash:proof.payloadHash,expectedRevision:proof.expectedRevision,productionRevision:p.revision,resultId:result.id,resultHash:digest(result)};
+  }
+  inspectWorkflowRecovery(id,session,requestId) {
+    const production=this.get(id,session);
+    if(typeof requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(requestId))throw new ApiError(400,'workflow要求IDが不正です。');
+    const r=this.db.prepare('SELECT * FROM workflow_preparations WHERE session_id=? AND request_id=?').get(session,requestId);
+    if(!r||r.production_id!==id||!['started','committed','abandoned'].includes(r.state))throw new ApiError(409,'対象のworkflow受付を一意に確認できません。');
+    const a=this.db.prepare('SELECT * FROM workflow_preparation_abandons WHERE session_id=? AND request_id=?').get(session,requestId);
+    if((r.state==='abandoned'&&(!a||a.production_id!==id||a.payload_hash!==r.payload_hash||a.expected_revision!==r.expected_revision||!Number.isSafeInteger(a.observed_revision)||typeof a.created_at!=='string'))||(r.state!=='abandoned'&&a))throw new ApiError(409,'workflow復旧記録を照合できません。');
+    return {production,receipt:{requestId:r.request_id,productionId:r.production_id,sessionId:r.session_id,payloadHash:r.payload_hash,expectedRevision:r.expected_revision,state:r.state,workflowId:r.workflow_id,workflowHash:r.workflow_hash,snapshotHash:r.snapshot_hash,...(a?{observedRevision:a.observed_revision,createdAt:a.created_at}:{})}};
+  }
+  abandonWorkflowPreparation(id,session,input) {
+    if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).sort().join(',')!=='expectedRevision,observedRevision,payloadHash,requestId'||typeof input.requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(input.requestId)||typeof input.payloadHash!=='string'||!/^[a-f0-9]{64}$/.test(input.payloadHash)||!Number.isSafeInteger(input.expectedRevision)||input.expectedRevision<0||!Number.isSafeInteger(input.observedRevision)||input.observedRevision<0)throw new ApiError(400,'受付ID、payload hashと確認したrevisionを指定してください。');
+    return this.store.transaction(()=>{
+      const p=this.get(id,session),r=this.db.prepare('SELECT * FROM workflow_preparations WHERE session_id=? AND request_id=?').get(session,input.requestId);
+      if(!r||r.production_id!==id||r.payload_hash!==input.payloadHash||r.expected_revision!==input.expectedRevision)throw new ApiError(409,'受付の所有情報または確認内容が一致しません。');
+      const old=this.db.prepare('SELECT * FROM workflow_preparation_abandons WHERE session_id=? AND request_id=?').get(session,input.requestId);
+      if(r.state==='abandoned') {
+        if(!old||old.production_id!==id||old.payload_hash!==input.payloadHash||old.expected_revision!==input.expectedRevision||old.observed_revision!==input.observedRevision)throw new ApiError(409,'既存の復旧記録と確認内容が一致しません。');
+        return {receipt:{requestId:r.request_id,productionId:id,sessionId:session,payloadHash:r.payload_hash,expectedRevision:r.expected_revision,observedRevision:old.observed_revision,state:'abandoned',createdAt:old.created_at},created:false};
+      }
+      if(r.state!=='started'||old||r.workflow_id!==null||r.workflow_hash!==null||r.snapshot_hash!==null||p.revision!==input.observedRevision)throw new ApiError(409,'受付または制作の状態が変化しています。再読取して確認してください。');
+      const update=this.db.prepare("UPDATE workflow_preparations SET state='abandoned' WHERE session_id=? AND request_id=? AND production_id=? AND payload_hash=? AND expected_revision=? AND state='started'").run(session,input.requestId,id,input.payloadHash,input.expectedRevision);
+      if(update.changes!==1)throw new ApiError(409,'workflow受付が変更されました。');
+      const createdAt=new Date().toISOString();
+      this.db.prepare('INSERT INTO workflow_preparation_abandons VALUES(?,?,?,?,?,?,?)').run(session,input.requestId,id,input.payloadHash,input.expectedRevision,input.observedRevision,createdAt);
+      this.updateProductionReceiptsManifest();
+      this.store.event(id,'workflow_preparation_abandoned',{requestId:input.requestId,payloadHash:input.payloadHash,expectedRevision:input.expectedRevision,observedRevision:input.observedRevision});
+      return {receipt:{requestId:input.requestId,productionId:id,sessionId:session,payloadHash:input.payloadHash,expectedRevision:input.expectedRevision,observedRevision:input.observedRevision,state:'abandoned',createdAt},created:true};
+    });
   }
   bindWorkflow(id,session,revision,workflow,mossPeAdoption=null,preparation=null) {
     return this.store.transaction(()=>{
@@ -179,23 +612,35 @@ export class ProductionStore {
       if(preparation){
         const result=this.db.prepare("UPDATE workflow_preparations SET state='committed',workflow_id=?,workflow_hash=?,snapshot_hash=? WHERE session_id=? AND request_id=? AND production_id=? AND expected_revision=? AND payload_hash=? AND state='started'").run(workflow.id,workflow.sha256,digest(workflow),session,preparation.requestId,id,revision,preparation.payloadHash);
         if(result.changes!==1)throw new ApiError(409,'workflow要求の受付記録を確認できません。');
+        this.updateProductionReceiptsManifest();
       }
       return this.write(p,'workflow_selected',{workflowId:workflow.id,sha256:workflow.sha256,rationale:workflow.rationale,...(mossPeAdoption?{mossPeAdoption}:{})});
     });
+  }
+  findPreparedRenderReceipt(id,session,input,workflow){
+    this.db.exec('BEGIN');try{
+      const requestId=input.requestId,row=this.db.prepare('SELECT * FROM prepared_render_receipts WHERE session_id=? AND request_id=?').get(session,requestId),p=this.get(id,session),stored=this.db.prepare('SELECT id,payload_hash,phase,json FROM runs WHERE request_id=?').get(requestId);
+      let run,event;try{run=JSON.parse(stored?.json);event=JSON.parse(this.db.prepare('SELECT json FROM events WHERE seq=? AND run_id=? AND type=?').get(row?.event_seq,id,'render_requested')?.json);}catch{}
+      const created=this.db.prepare("SELECT seq,json FROM events WHERE run_id=? AND type='created'").all(row?.run_id);let creation;try{if(created.length===1)creation=JSON.parse(created[0].json);}catch{}
+      const origin=this.db.prepare('SELECT session_id,request_id,payload_hash FROM productions WHERE id=?').get(id),origins=this.db.prepare("SELECT seq,json FROM events WHERE run_id=? AND type='production_created'").all(id);let original;try{if(origins.length===1)original=JSON.parse(origins[0].json);}catch{}
+      if(!row||row.production_id!==id||row.run_id!==stored?.id||row.payload_hash!==digest(input)||row.expected_revision!==input.expectedRevision||row.production_revision!==row.expected_revision+1||row.workflow_id!==input.workflowId||row.workflow_id!==workflow?.id||row.workflow_hash!==workflow?.sha256||row.snapshot_hash!==digest(workflow)||p.id!==id||p.sessionId!==session||origin?.session_id!==session||origin.request_id!==p.requestId||origin.payload_hash!==p.briefHash||digest(p.brief)!==p.briefHash||origins.length!==1||original?.briefHash!==p.briefHash||origins[0].seq>=row.event_seq||!run||run.id!==row.run_id||run.sessionId!==session||run.productionId!==id||run.requestId!==requestId||run.productionRevision!==row.production_revision||run.phase!==stored.phase||digest(run.spec)!==stored.payload_hash||run.specHash!==stored.payload_hash||run.spec?.briefHash!==p.briefHash||digest(run.spec?.workflow)!==row.snapshot_hash||!Array.isArray(p.attempts)||p.attempts.filter(x=>x===run.id).length!==1||p.revision<row.production_revision||event?.runId!==run.id||event.revision!==row.production_revision||event.preparedRequest?.requestId!==requestId||event.preparedRequest?.payloadHash!==row.payload_hash||event.preparedRequest?.expectedRevision!==row.expected_revision||event.preparedRequest?.workflowId!==row.workflow_id||event.preparedRequest?.workflowHash!==row.workflow_hash||event.preparedRequest?.snapshotHash!==row.snapshot_hash||created.length!==1||created[0].seq<=row.event_seq||creation?.specHash!==stored.payload_hash)throw new Error('Prepared render evidence differs');
+      this.assertMutationNotRejected(session,'render',requestId);this.db.exec('COMMIT');return {run,production:p,receipt:{requestId,sessionId:session,productionId:id,runId:run.id,payloadHash:row.payload_hash,expectedRevision:row.expected_revision,productionRevision:row.production_revision,workflowId:row.workflow_id,workflowHash:row.workflow_hash,snapshotHash:row.snapshot_hash}};
+    }catch(error){this.db.exec('ROLLBACK');throw new ApiError(503,'保存済み生成の元要求を確認できません。再送せず保留してください。');}
   }
   renderPrepared(id,session,input,workflow){
     if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['requestId','workflowId','expectedRevision'].includes(key)))throw new ApiError(400,'保存済みworkflowの生成にはworkflowId、revision、requestIdのみを指定してください。条件変更は新しいdraftを作成してください。');
     const current=this.get(id,session);
     const previous=typeof input.requestId==='string'?this.db.prepare('SELECT json FROM runs WHERE request_id=?').get(input.requestId):null;
-    if(previous){const run=JSON.parse(previous.json);if(run.productionId!==id||run.sessionId!==session||run.spec?.workflow?.id!==input.workflowId||run.spec?.workflow?.sha256!==workflow.sha256||workflow.productionId!==id)throw new ApiError(409,'同じrequestIdは別の制作またはworkflowに使われています。');return {run,production:current,created:false};}
+    if(previous)return {...this.findPreparedRenderReceipt(id,session,input,workflow),created:false};
     if(!officialInputProfile(current.brief.modelProfile)||![4,5].includes(workflow.schemaVersion)||workflow.productionId!==id||workflow.id!==input.workflowId||workflow.id!==current.workflowId||workflow.sha256!==current.workflowSha256||workflow.modelProfile!==current.brief.modelProfile)throw new ApiError(409,'保存済みworkflowと制作の紐付けが一致しません。');
     const request=workflow.request,output=workflow.output;
     if(!request||typeof request!=='object'||!output||typeof output!=='object')throw new ApiError(409,'保存済みworkflowの生成条件を確認できません。');
     const qwen=workflow.schemaVersion===5,mode=workflow.mode;
     const derived={requestId:input.requestId,workflowId:input.workflowId,expectedRevision:input.expectedRevision,prompt:request.prompt,negativePrompt:request.negativePrompt??'',seed:request.seed??'42',width:output.width,height:output.height,steps:request.steps??(qwen&&request.variant==='turbo'?8:mode==='edit'&&!qwen?30:25),enhancer:false};
-    return this.render(id,session,derived,workflow);
+    let result;try{result=this.render(id,session,derived,workflow,{preparedInput:input});}catch(error){if(this.db.prepare('SELECT 1 FROM runs WHERE request_id=?').get(input.requestId))throw new ApiError(503,'生成受付の結果が不明です。再送せず照合してください。');throw error;}
+    const saved=this.findPreparedRenderReceipt(id,session,input,workflow);return {...result,...saved};
   }
-  render(id,session,input,workflow) {
+  render(id,session,input,workflow,{preparedInput=null}={}) {
     const current=this.get(id,session),mode=current.brief.mode??'t2i';
     assertActiveProfile(current.brief.modelProfile);
     if((input.mode!==undefined&&input.mode!==mode)||(input.inputAssetId!==undefined&&input.inputAssetId!==(current.brief.inputAssetId??null)))throw new ApiError(409,'生成モードまたは入力画像を制作途中で変更できません。');
@@ -217,7 +662,7 @@ export class ProductionStore {
       try {validateEnhancementSpec(spec);}
       catch(error) {throw new ApiError(400,'プロンプト補助の入力条件を確認してください。 '+error.message);}
     }
-    const result=this.store.create({...normalized,spec},{decorate:run=>{
+    const result=this.store.create({...normalized,spec},{beforeCreate:()=>this.assertMutationNotRejected(session,'render',normalized.requestId),decorate:run=>{
       const p=this.get(id,session);this.check(p,input.expectedRevision);
       if(p.workflowId!==workflow.id||p.workflowSha256!==workflow.sha256) throw new ApiError(409,'現在選択されているworkflowと一致しません。');
       let resourceRetryOf=null;
@@ -233,13 +678,29 @@ export class ProductionStore {
       const feedbackId=p.activeFeedback?.id??null;
       if(feedbackId){const item=p.feedbackRequests.find(feedback=>feedback.id===feedbackId);if(item)item.resultRunId=run.id;p.activeFeedback=null;}
       p.revision++;p.phase='generating';p.latestRunId=run.id;p.attempts.push(run.id);
-      this.write(p,'render_requested',{runId:run.id,attempt:p.attempts.length,...(feedbackId?{feedbackId}:{}),...(resourceRetryOf?{resourceRetryOf}:{})});
+      const preparedRequest=preparedInput?{requestId:preparedInput.requestId,payloadHash:digest(preparedInput),expectedRevision:preparedInput.expectedRevision,workflowId:workflow.id,workflowHash:workflow.sha256,snapshotHash:digest(workflow)}:null;
+      this.write(p,'render_requested',{runId:run.id,attempt:p.attempts.length,...(feedbackId?{feedbackId}:{}),...(resourceRetryOf?{resourceRetryOf}:{}),...(preparedRequest?{preparedRequest}:{})});
+      if(!officialInputProfile(workflow.modelProfile)){
+        const eventSeq=this.db.prepare('SELECT last_insert_rowid() AS value').get().value;
+        this.db.prepare('INSERT INTO legacy_render_receipts VALUES(?,?,?,?,?,?,?,?,?,?)').run(session,normalized.requestId,id,run.id,digest(input),input.expectedRevision,p.revision,workflow.id,workflow.sha256,eventSeq);
+        this.updateProductionReceiptsManifest();
+      }
+      if(preparedRequest){const eventSeq=this.db.prepare('SELECT last_insert_rowid() AS value').get().value;this.db.prepare('INSERT INTO prepared_render_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(session,normalized.requestId,id,run.id,preparedRequest.payloadHash,input.expectedRevision,p.revision,workflow.id,workflow.sha256,preparedRequest.snapshotHash,eventSeq);this.updateProductionReceiptsManifest();}
       return {productionId:id,productionRevision:p.revision,sessionId:session,attempt:p.attempts.length,...(feedbackId?{feedbackId}:{}),...(resourceRetryOf?{resourceRetryOf}:{})};
     }});
+    if(!officialInputProfile(workflow.modelProfile)){
+      try{
+        const saved=this.findRenderByRequest(id,session,normalized.requestId);
+        if(saved.receipt&&saved.receipt.payloadHash!==digest(input))throw new Error('Legacy render request ID belongs to different input');
+        return {...result,production:saved.production,...(saved.receipt?{receipt:saved.receipt,...(saved.cancellationReceipt?{cancellationReceipt:saved.cancellationReceipt}:{})}:{})};
+      }catch{throw new ApiError(503,'旧形式の生成受付後の結果を確認できません。再送せず同じ要求を照合してください。');}
+    }
     return {...result,production:this.get(id,session)};
   }
   evaluate(id,session,input) {
+    const proof=this.actionReceiptInput(input);
     return this.store.transaction(()=>{
+      const existing=this.existingActionReceipt(id,session,'evaluate',proof);if(existing)return existing;
       const p=this.get(id,session);this.check(p,input.expectedRevision);
       const run=this.store.get(input.runId);
       if(!run||run.productionId!==id||p.latestRunId!==run.id||!terminalPhases.has(run.phase)) throw new ApiError(409,'評価対象の生成が完了していません。');
@@ -273,7 +734,7 @@ export class ProductionStore {
       this.db.prepare('INSERT INTO evaluations VALUES(?,?,?,?)').run(evaluation.id,id,run.id,JSON.stringify(evaluation));
       if(input.bestRunId!==undefined)p.bestRunId=input.bestRunId;
       p.evaluations.push(evaluation);p.revision++;p.phase=input.decision==='complete'?'completed':input.decision==='revise'?'revising':'needs_user';
-      this.write(p,'image_evaluated',{evaluation});return {production:p,evaluation};
+      this.write(p,'image_evaluated',{evaluation});const receipt=this.saveActionReceipt(id,session,'evaluate',proof,p,evaluation);return {production:p,evaluation,...(receipt?{receipt,created:true}:{})};
     });
   }
   assertBestCandidate(p,runId,currentEvaluationRunId=null) {
@@ -283,7 +744,9 @@ export class ProductionStore {
       (runId!==currentEvaluationRunId&&!p.evaluations.some(e=>e.runId===runId)))throw new ApiError(409,'最良候補は評価済みの成功した成果物に限ります。');
   }
   planIteration(id,session,input) {
+    const proof=this.actionReceiptInput(input);
     return this.store.transaction(()=>{
+      const existing=this.existingActionReceipt(id,session,'iteration',proof);if(existing)return existing;
       const p=this.get(id,session);this.check(p,input.expectedRevision);
       const feedback=p.activeFeedback?.afterRunId===p.latestRunId?p.activeFeedback:null;
       const expectedSource=feedback?.sourceRunId??p.latestRunId;
@@ -294,7 +757,7 @@ export class ProductionStore {
       const plan={id:randomUUID(),sourceRunId:input.sourceRunId,sourceSpecHash:previous.specHash,sourceArtifactSha256:previous.artifactSha256,category:input.category,action:input.action,hypothesis:text(input.hypothesis,3000,'改善仮説'),preserve:textList(input.preserve,'維持点',{min:1}),changes:textList(input.changes,'変更点',{min:1}),comparison:text(input.comparison,3000,'比較方法'),at:new Date().toISOString()};
       if(input.bestRunId!==undefined){p.bestRunId=input.bestRunId;plan.bestRunId=input.bestRunId;}
       (p.iterationPlans??=[]).push(plan);p.revision++;
-      this.write(p,'iteration_planned',{plan});return {production:p,plan};
+      this.write(p,'iteration_planned',{plan});const receipt=this.saveActionReceipt(id,session,'iteration',proof,p,plan);return {production:p,plan,...(receipt?{receipt,created:true}:{})};
     });
   }
   resumeWithFeedback(id,session,input) {
@@ -302,7 +765,12 @@ export class ProductionStore {
     const sourceRunId=text(input?.sourceRunId,160,'sourceRunId');
     const feedback=text(input?.feedback,4000,'利用者の追加指示');
     const hash=digest({sourceRunId,feedback});
+    // Historical feedback accepts any nonempty requestId up to 160 chars.
+    // Only IDs in the newer receipt contract get a new durable receipt;
+    // retain the old response/replay behavior for other historical IDs.
+    const proof=/^[-a-zA-Z0-9_]{16,100}$/.test(requestId)?this.actionReceiptInput(input):null;
     return this.store.transaction(()=>{
+      const accepted=this.existingActionReceipt(id,session,'feedback',proof);if(accepted)return accepted;
       const p=this.get(id,session);
       const existing=(p.feedbackRequests??[]).find(item=>item.requestId===requestId);
       if(existing){
@@ -318,7 +786,7 @@ export class ProductionStore {
       this.assertBestCandidate(p,sourceRunId);
       const record={id:randomUUID(),requestId,hash,sourceRunId,afterRunId:p.latestRunId,feedback,at:new Date().toISOString()};
       (p.feedbackRequests??=[]).push(record);p.activeFeedback=record;p.phase='revising';p.revision++;
-      this.write(p,'user_feedback_recorded',{feedback:record});return {production:p,feedback:record,created:true};
+      this.write(p,'user_feedback_recorded',{feedback:record});const receipt=this.saveActionReceipt(id,session,'feedback',proof,p,record);return {production:p,feedback:record,created:true,...(receipt?{receipt}:{})};
     });
   }
   userDecision(id,session,input) {
@@ -364,16 +832,15 @@ export class ProductionStore {
       return {claimed:input.state==='sending',state:input.state};
     });
   }
-  cancel(id,session,{expectedRunId,expectedRevision}={}) {
-    // The flag and current-attempt cancellation are one durable transaction.
-    return this.store.transaction(()=>{
+  cancelInTransaction(id,session,{expectedRunId,expectedRevision}={}) {
       const p=this.get(id,session);
+      if(p.id!==id||p.sessionId!==session||!Array.isArray(p.attempts)||new Set(p.attempts).size!==p.attempts.length)throw new ApiError(409,'停止対象の所有情報または生成一覧を確認できません。');
       if(expectedRevision!==undefined&&p.revision!==expectedRevision||expectedRunId!==undefined&&p.latestRunId!==expectedRunId)throw new ApiError(409,'停止対象の生成または制作の状態が変わりました。');
+      const runs=p.attempts.map(runId=>{const run=this.store.get(runId);if(!run||run.id!==runId||run.productionId!==id||run.sessionId!==session)throw new ApiError(409,'停止対象の生成と所有情報が一致しません。');return run;});
       if(p.cancelRequested||p.phase==='completed') return p;
       p.cancelRequested=true;p.cancelRequestedAt=new Date().toISOString();p.revision++;p.phase='cancelled';
-      for(const runId of p.attempts) {
-        const run=this.store.get(runId);
-        if(run&&!terminalPhases.has(run.phase)) {
+      for(const run of runs) {
+        if(!terminalPhases.has(run.phase)) {
           p.phase='cancelling';
           run.cancelRequested=true;run.cancelRequestedAt=p.cancelRequestedAt;run.updatedAt=p.cancelRequestedAt;
           this.db.prepare('UPDATE runs SET json=? WHERE id=?').run(JSON.stringify(run),run.id);
@@ -381,6 +848,47 @@ export class ProductionStore {
         }
       }
       return this.write(p,'production_cancelled');
+  }
+  cancel(id,session,input={}) {
+    // The production flag and current-attempt cancellation are one durable transaction.
+    return this.store.transaction(()=>this.cancelInTransaction(id,session,input));
+  }
+  cancelReceiptInTransaction(id,session,requestId) {
+    const p=this.get(id,session);
+    if(typeof requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(requestId))throw new ApiError(400,'停止要求IDが不正です。');
+    const row=this.db.prepare('SELECT * FROM production_cancel_receipts WHERE session_id=? AND request_id=?').get(session,requestId);
+    if(!row||row.production_id!==id)throw new ApiError(404,'停止受付を確認できません。未観測は未実行の証明ではありません。');
+    this.assertMutationNotRejected(session,'cancel',requestId);
+    let receipt,eventData;
+    try{receipt=JSON.parse(row.receipt_json);const event=this.db.prepare('SELECT run_id,type,json FROM events WHERE seq=?').get(row.event_seq);if(!event||event.run_id!==id||event.type!=='production_cancel_receipt')throw Error();eventData=JSON.parse(event.json);}catch{throw new ApiError(409,'停止受付の監査記録を確認できません。');}
+    if(!receipt||!eventData?.receipt||p.id!==id||p.sessionId!==session||receipt.sessionId!==session||receipt.productionId!==id||receipt.requestId!==requestId||receipt.operation!==row.operation||!['cancel','cancel-owned'].includes(row.operation)||receipt.payloadHash!==row.payload_hash||!/^[a-f0-9]{64}$/.test(row.payload_hash)||digest(receipt)!==row.receipt_hash||digest(eventData.receipt)!==row.receipt_hash||!Number.isSafeInteger(receipt.previousRevision)||!Number.isSafeInteger(receipt.productionRevision)||receipt.previousRevision<0||receipt.productionRevision<receipt.previousRevision||receipt.productionRevision>receipt.previousRevision+1||!Number.isSafeInteger(p.revision)||p.revision<receipt.productionRevision||!['accepted','already-requested','already-completed'].includes(receipt.disposition)||typeof receipt.acceptedAt!=='string'||(receipt.disposition==='accepted'&&receipt.productionRevision!==receipt.previousRevision+1)||(receipt.disposition!=='accepted'&&receipt.productionRevision!==receipt.previousRevision)||(['accepted','already-requested'].includes(receipt.disposition)&&(p.cancelRequested!==true||typeof receipt.cancelRequestedAt!=='string'||receipt.cancelRequestedAt!==p.cancelRequestedAt)))throw new ApiError(409,'停止受付と制作の保存情報が一致しません。結果を保留してください。');
+    return {production:p,receipt};
+  }
+  findCancelByRequest(id,session,requestId) {
+    this.db.exec('BEGIN');
+    try{const result=this.cancelReceiptInTransaction(id,session,requestId);this.db.exec('COMMIT');return result;}
+    catch(error){this.db.exec('ROLLBACK');throw error;}
+  }
+  cancelWithReceipt(id,session,input,operation) {
+    if(!input||typeof input!=='object'||Array.isArray(input)||!['cancel','cancel-owned'].includes(operation)||typeof input.requestId!=='string'||!/^[-a-zA-Z0-9_]{16,100}$/.test(input.requestId))throw new ApiError(400,'停止要求IDが不正です。');
+    const payloadHash=digest(input);
+    return this.store.transaction(()=>{
+      this.assertMutationNotRejected(session,'cancel',input.requestId);
+      const row=this.db.prepare('SELECT production_id,operation,payload_hash FROM production_cancel_receipts WHERE session_id=? AND request_id=?').get(session,input.requestId);
+      if(row){
+        if(row.production_id!==id||row.operation!==operation||row.payload_hash!==payloadHash)throw new ApiError(409,'同じ停止要求IDの対象または内容を変更できません。');
+        return {...this.cancelReceiptInTransaction(id,session,input.requestId),created:false};
+      }
+      const before=this.get(id,session);
+      if(before.id!==id||before.sessionId!==session||!Number.isSafeInteger(before.revision)||before.revision<0)throw new ApiError(409,'停止対象の制作情報を確認できません。');
+      const disposition=before.cancelRequested?'already-requested':before.phase==='completed'?'already-completed':'accepted';
+      const p=this.cancelInTransaction(id,session,{expectedRunId:input.expectedRunId,expectedRevision:input.expectedRevision});
+      const receipt={requestId:input.requestId,sessionId:session,productionId:id,operation,payloadHash,previousRevision:before.revision,productionRevision:p.revision,disposition,acceptedAt:new Date().toISOString(),...(disposition!=='already-completed'?{cancelRequestedAt:p.cancelRequestedAt}:{})};
+      this.store.event(id,'production_cancel_receipt',{receipt});
+      const eventSeq=this.db.prepare('SELECT last_insert_rowid() AS value').get().value;
+      this.db.prepare('INSERT INTO production_cancel_receipts VALUES(?,?,?,?,?,?,?,?)').run(session,input.requestId,id,operation,payloadHash,JSON.stringify(receipt),digest(receipt),eventSeq);
+      this.updateProductionReceiptsManifest();
+      return {production:p,receipt,created:true};
     });
   }
 }

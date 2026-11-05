@@ -1,12 +1,19 @@
 import {readFile,lstat} from 'node:fs/promises';
-import {join,resolve} from 'node:path';
+import {join,resolve,win32} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {createSystemAdapter} from './service-manager.mjs';
 import {readJson} from '../shared/runtime-files.mjs';
+import {createMaintenanceCapability} from './maintenance-capability.mjs';
 
 const fault=(message,status=409)=>Object.assign(Error(message),{status});
 const sessionId=agent=>agent.session?.id??agent.id;
 export const MEDIA_GENERATION_TOOLS=new Set(['local_prepared_render','local_production_render','local_moss_pe_start','local_qwen_pe_start']);
 const generationBoundary=()=>fault('生成またはプロンプト拡張の実行中は、その処理を保護するためDSHを強制再起動できません。完了を待つか、その制作を明示的に停止してから再確認してください。');
+export function assertManagedDshLauncher(launcher,root,{scriptPath=fileURLToPath(new URL('../../../scripts/Start-Environment.ps1',import.meta.url))}={}){
+  const equal=(a,b)=>typeof a==='string'&&typeof b==='string'&&win32.normalize(a).toLowerCase()===win32.normalize(b).toLowerCase();
+  const expected=['-nologo','-noprofile','-noninteractive','-file',null,'-service','dsh'],args=launcher?.args;
+  if(!launcher||typeof launcher.executable!=='string'||launcher.executable.toLowerCase()!=='pwsh.exe'||!Array.isArray(args)||args.length!==expected.length||args.some((value,i)=>typeof value!=='string'||(i===4?!equal(value,scriptPath):value.toLowerCase()!==expected[i]))||!equal(launcher.cwd,root)||!equal(launcher.env?.MEDIA_STUDIO_HOME,root)||Object.keys(launcher.env??{}).some(key=>key!=='MEDIA_STUDIO_HOME'))throw fault('DSH再起動の起動設定が管理対象scriptと一致しません。再起動を保留します。');
+}
 
 // Optional integration for the generic DSH host-control package. A Media Studio
 // profile requires this module explicitly; missing/invalid policy fails loading.
@@ -29,7 +36,8 @@ export async function createHostRestartPolicy({root,ctx,settings,fetcher=fetch,s
     if(services.services.find(s=>s.id==='Strata')?.state==='running'){const configuration=await readJson(root,join(root,'config/strata.json')),token=(await readFile(join(root,'data/strata/api-token'),'utf8')).trim(),status=await requestJson(configuration.baseUrl+'/v1/status',{headers:{Authorization:'Bearer '+token}});if(!Number.isSafeInteger(status.activity?.in_flight)||status.activity.in_flight<0||status.activity.in_flight>0&&(!allowCore||!scope))throw fault('所有者を確認できないStrata推論があります。');}
     return scope;
   }
-  async function verifyExternal(context,{mode='normal',quiescent=false}={}){
+  async function verifyExternal(context,{mode='normal',quiescent=false,launcher}={}){
+    assertManagedDshLauncher(launcher,root);
     const services=await system.snapshot();
     if(mode==='force')await forceResources(services,{allowCore:!quiescent});
     else await system.assertIdle(services,context.cookie);
@@ -43,5 +51,8 @@ export async function createHostRestartPolicy({root,ctx,settings,fetcher=fetch,s
     if(!searchTurn)throw fault('中核推論の会話世代を確認できません。');
     try{await controllerRequest('/api/core-scope/cancel',{id:scope.id,searchTurn});}catch{await forceResources(await system.snapshot());}
   }
-  return {protectedTools:new Set(MEDIA_GENERATION_TOOLS),blockedMessage:generationBoundary().message,verifyExternal,cancelOwnedInference};
+  // Missing or unverifiable maintenance provisioning closes only the optional
+  // maintenance route; ordinary generation and restart policy remain usable.
+  let maintenance=null,maintenanceUnavailable=false;try{maintenance=await createMaintenanceCapability({root,settings});}catch{maintenanceUnavailable=true;}
+  return {protectedTools:new Set(MEDIA_GENERATION_TOOLS),blockedMessage:generationBoundary().message,verifyExternal,cancelOwnedInference,...(maintenance?{maintenance}:{}),maintenanceUnavailable};
 }

@@ -6,6 +6,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $taskRoot = if ($env:MEDIA_STUDIO_HOME) { if (-not [IO.Path]::IsPathFullyQualified($env:MEDIA_STUDIO_HOME)) { throw 'MEDIA_STUDIO_HOME must be absolute' }; [IO.Path]::GetFullPath($env:MEDIA_STUDIO_HOME) } else { Split-Path $PSScriptRoot -Parent }
 $settings = Get-Content -LiteralPath (Join-Path $taskRoot 'config\environment.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'DshLaunchLock.ps1')
+$dshLaunchLock = $null
 
 function Get-ProjectPath([string]$RelativePath) {
     $result = [IO.Path]::GetFullPath((Join-Path $taskRoot $RelativePath))
@@ -62,6 +64,7 @@ function Test-ServiceReady([string]$Name, [string]$BaseUrl, [string]$LogPath) {
 $savedEnvironment = @{}
 try {
     if (-not $ValidateOnly) {
+        if ($Service -in @('All','DSH')) { $dshLaunchLock = Enter-DshLaunchLock $taskRoot; Assert-DefaultDshDesktopStopped }
         $childEnvironment = @{
             DSH_HOME = Get-ProjectPath $settings.dshHome
             DSH_TELEMETRY_MODE = 'DISABLED'
@@ -170,6 +173,7 @@ try {
         if ($name -eq 'DSH') { Write-Output 'Open the authorized browser session with Open-DSH.cmd.' }
     }
 } finally {
+    if ($dshLaunchLock) { $dshLaunchLock.Dispose() }
     foreach ($key in $savedEnvironment.Keys) {
         if ($null -eq $savedEnvironment[$key]) {
             Remove-Item -LiteralPath ("Env:\" + $key) -ErrorAction SilentlyContinue

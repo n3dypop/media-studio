@@ -19,7 +19,7 @@ async function body(req, limit = 32768) {
   for await(const chunk of req) { size+=chunk.length; if(size>limit) throw new ApiError(413,'入力が大きすぎます。'); chunks.push(chunk); }
   try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new ApiError(400,'JSONを読み取れません。');}
 }
-export function createControllerServer({store,engine,token,dshToken,productions,workflows,gate,strata,search,assets,mossPe,mossPeEnabled=false,qwenPe,qwenPeEnabled=false,monitorTelemetry=null,monitorProgress=null,outputRoot,port,comfyUrl,profile,onShutdown=()=>{},experimentalHostIsolation=false}) {
+export function createControllerServer({store,engine,token,dshToken,productions,workflows,gate,strata,search,assets,mossPe,mossPeEnabled=false,qwenPe,qwenPeEnabled=false,monitorTelemetry=null,monitorProgress=null,outputRoot,port,comfyUrl,profile,wireStore=null,wireReader=null,onShutdown=()=>{},experimentalHostIsolation=false}) {
   // Host isolation is not complete. Do not silently run the legacy API if an
   // operator attempts to enable it before storage and recovery are ready.
   if(experimentalHostIsolation!==false)throw new Error('Host isolation is incomplete; strict Controller startup is disabled.');
@@ -101,14 +101,24 @@ export function createControllerServer({store,engine,token,dshToken,productions,
         return json(res,200,{profiles:catalog.modelProfiles,defaultProfile:catalog.modelProfile});
       }
       if(role==='dsh'&&path.startsWith('/api/')) validateSession(req.headers['x-dsh-session']);
+      if(path==='/api/durable-wire-proof'&&req.method==='GET'){
+        if(role!=='dsh')throw new ApiError(403,'配送証拠はこの会話だけが確認できます。');
+        if(!wireStore)throw new ApiError(503,'配送証拠を確認できません。');
+        const names=['sessionId','intentId','receiptHash','receiptNonceHash','priorCallIdHash','nextCallIdHash'];
+        if([...url.searchParams.keys()].some(key=>!names.includes(key))||names.some(key=>url.searchParams.getAll(key).length!==1))throw new ApiError(400,'配送証拠の指定が不正です。');
+        const proof=Object.fromEntries(names.map(key=>[key,url.searchParams.get(key)]));
+        if(proof.sessionId!==validateSession(req.headers['x-dsh-session']))throw new ApiError(404,'この会話の配送証拠ではありません。');
+        if(!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(proof.intentId)||['receiptHash','receiptNonceHash','priorCallIdHash','nextCallIdHash'].some(key=>!/^[a-f0-9]{64}$/.test(proof[key])))throw new ApiError(400,'配送証拠の指定が不正です。');
+        try{return json(res,200,{present:wireStore.has(proof)});}catch{throw new ApiError(503,'配送証拠を確認できません。元の操作を保留してください。');}
+      }
       if(path==='/api/studio-monitor'&&req.method==='GET'){
         const sessionId=validateSession(req.headers['x-dsh-session']);
         if(!productions)throw new ApiError(503,'制作状況を確認できません。');
         return json(res,200,await monitorSnapshot({sessionId,store,productions,gate,inferenceScope,telemetry:monitorTelemetry,progress:monitorProgress}));
       }
-      if(await assetRoute({req,res,path,assets,body,json}))return;
-      if(await mossPeRoute({req,res,path,url,body,json,mossPe,enabled:mossPeEnabled}))return;
-      if(await mossPeRoute({req,res,path,url,body,json,mossPe:qwenPe,enabled:qwenPeEnabled,basePath:'/api/qwen-pe'}))return;
+      if(await assetRoute({req,res,path,role,assets,productions,body,json}))return;
+      if(await mossPeRoute({req,res,path,url,body,json,mossPe,productions,enabled:mossPeEnabled}))return;
+      if(await mossPeRoute({req,res,path,url,body,json,mossPe:qwenPe,productions,enabled:qwenPeEnabled,basePath:'/api/qwen-pe'}))return;
       if(path==='/api/core-scope/start'&&req.method==='POST') {
         const sessionId=validateSession(req.headers['x-dsh-session']);
         const input=await body(req);
@@ -142,14 +152,21 @@ export function createControllerServer({store,engine,token,dshToken,productions,
       }
       if(path==='/v1/chat/completions'&&role==='dsh'&&!inferenceScope) throw new ApiError(409,'DSH中核ゲートの会話登録が必要です。');
       if(path==='/v1/chat/completions'&&role==='dsh'&&inferenceScope.cancelRequested)throw new ApiError(409,'この中核推論は停止を受け付けています。');
-      if(await inferenceRoute({req,res,path,role,body,json,gate,strata,registerInference:(session,controller)=>registerInference(role==='dsh'?inferenceScope?.sessionId:session,controller)})) return;
+      const claimedSession=req.headers['x-dsh-session'],claimedScope=req.headers['x-dsh-scope'];
+      if(path==='/v1/chat/completions'&&role==='dsh'&&((claimedSession!==undefined&&claimedSession!==inferenceScope.sessionId)||(claimedScope!==undefined&&claimedScope!==inferenceScope.id)))throw new ApiError(403,'推論の会話またはscopeが一致しません。');
+      const wireSessionId=role==='dsh'&&claimedSession===inferenceScope?.sessionId&&claimedScope===inferenceScope?.id?inferenceScope.sessionId:null;
+      if(await inferenceRoute({req,res,path,role,body,json,gate,strata,wireStore,wireReader,wireSessionId,registerInference:(session,controller)=>registerInference(role==='dsh'?inferenceScope?.sessionId:session,controller)})) return;
       if(path==='/api/production-state'&&req.method==='GET') {
         if(role!=='admin')throw new ApiError(403,'制作全体の一覧は本人画面だけが使用できます。');
         return json(res,200,{productions:productionState(),inferenceSession:inferenceScope?.sessionId??null,inferenceScope});
       }
       if(await productionRoute({req,res,path,url,role,store,engine,productions,workflows,mossPe,qwenPe,body,json,abortSession,cancelProductionPe:(production,session)=>{mossPe?.cancelProduction(production,session);qwenPe?.cancelProduction(production,session);},validateStopTurn:(session,turn)=>search?.validateStopTurn?.(session,turn)})) return;
       if(await searchRoute({req,res,path,url,role,productions,search,body,json,backgroundSearch}))return;
-      if(req.method==='GET'&&path==='/api/status') return json(res,200,{profile,activeRunId:store.active()?.id??null,comfyUrl,scope:productions?'dsh-strata-production':'standalone-photo',controllerId:store.controllerId,resources:gate?.status()??null,search:{enabled:search?.enabled!==false&&Boolean(search)}});
+      if(req.method==='GET'&&path==='/api/status') {
+        const enabled=search?.enabled!==false&&Boolean(search),protectedRoute=search?.requireTurnOwner===true&&search?.requireGatewayOpen===true;
+        const availability=!enabled?'disabled':!protectedRoute?'unprotected':!search?.ownerProbe||!search?.openHandshake?'unavailable':'requires-current-host-confirmation';
+        return json(res,200,{profile,activeRunId:store.active()?.id??null,comfyUrl,scope:productions?'dsh-strata-production':'standalone-photo',controllerId:store.controllerId,resources:gate?.status()??null,search:{enabled,availability}});
+      }
       if(path==='/api/runs'&&req.method==='GET') return json(res,200,{runs:store.list().filter(run=>role==='admin'||run.sessionId===req.headers['x-dsh-session'])});
       if(path==='/api/runs'&&req.method==='POST') {
         if(role!=='admin') throw new ApiError(403,'DSHからの生成は制作APIを使用してください。');

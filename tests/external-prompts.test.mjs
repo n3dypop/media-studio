@@ -8,11 +8,14 @@ import {readExternalPrompt} from '../apps/controller/external-prompts.mjs';
 import {buildMossPromptEnhancer} from '../apps/controller/moss-prompt-enhancer.mjs';
 import {buildQwenPromptEnhancer} from '../apps/controller/qwen21-prompt-enhancer.mjs';
 import {MossPeCoordinator} from '../apps/controller/moss-pe-controller.mjs';
+import {RunStore} from '../apps/controller/store.mjs';
+import {ProductionStore} from '../apps/controller/productions.mjs';
 import {installExternalPrompts} from '../scripts/install-external-prompts.mjs';
 
 test('missing, relative and modified private official prompts never become usable',async()=>{
   const previous=process.env.MEDIA_STUDIO_HOME;
   const parent=resolve(tmpdir()),root=mkdtempSync(join(parent,'external-prompts-'));
+  const store=new RunStore(':memory:');
   try{
     delete process.env.MEDIA_STUDIO_HOME;
     assert.throws(()=>buildMossPromptEnhancer({prompt:'Test',seed:'42'}),/MEDIA_STUDIO_HOME/);
@@ -26,7 +29,7 @@ test('missing, relative and modified private official prompts never become usabl
     mkdirSync(path,{recursive:true});writeFileSync(join(path,'official-t2i-enhancer-system.txt'),'modified');
     assert.throws(()=>buildMossPromptEnhancer({prompt:'Test',seed:'42'}),/hash mismatch/);
     let requests=0;
-    const common={store:{},productions:{},adapter:{request:async()=>{requests++;return {};}},gate:{},verifyEpoch:async()=>({})};
+    const common={store,productions:new ProductionStore(store),adapter:{request:async()=>{requests++;return {};}},gate:{},verifyEpoch:async()=>({})};
     const moss=new MossPeCoordinator(common),qwen=new MossPeCoordinator({...common,family:'qwen',licenseCheck:async()=>true});
     assert.equal((await moss.availability()).available,false);
     assert.equal((await qwen.availability()).available,false);
@@ -36,6 +39,7 @@ test('missing, relative and modified private official prompts never become usabl
     await assert.rejects(qwen.execute('synthetic-run'),/unavailable/);
     assert.equal(requests,0,'missing or altered prompt must fail before network calls');
   }finally{
+    store.close();
     if(previous===undefined)delete process.env.MEDIA_STUDIO_HOME;else process.env.MEDIA_STUDIO_HOME=previous;
     const actual=resolve(root);
     if(!actual.startsWith(parent+sep)||lstatSync(actual).isSymbolicLink())throw Error('Unexpected temporary test root');

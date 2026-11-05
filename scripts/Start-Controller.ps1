@@ -2,6 +2,13 @@
 param([switch]$ValidateOnly)
 $ErrorActionPreference = 'Stop'
 $taskRoot = if ($env:MEDIA_STUDIO_HOME) { if (-not [IO.Path]::IsPathFullyQualified($env:MEDIA_STUDIO_HOME)) { throw 'MEDIA_STUDIO_HOME must be absolute' }; [IO.Path]::GetFullPath($env:MEDIA_STUDIO_HOME) } else { Split-Path $PSScriptRoot -Parent }
+function Assert-NoControllerPreopenGuard {
+    $path=Join-Path $taskRoot 'runtime/maintenance/controller-cutover-preopen.json'
+    try { $null=Get-Item -LiteralPath $path -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { return }
+    throw 'Controller cutover recovery is pending; preserve the database and backup.'
+}
+Assert-NoControllerPreopenGuard
 $environment = Get-Content -LiteralPath (Join-Path $taskRoot 'config/environment.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'Service-Paths.ps1')
 $settings = Get-Content -LiteralPath (Join-Path $taskRoot 'config/controller.json') -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -68,6 +75,7 @@ $launchLock = $null
 try {
     try { $launchLock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
     catch { throw 'Another Controller launch or shutdown is in progress. No new process was started.' }
+    Assert-NoControllerPreopenGuard
 
     if (Test-Path -LiteralPath $statePath) {
         $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json

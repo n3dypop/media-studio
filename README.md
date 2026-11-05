@@ -50,8 +50,13 @@ require hash-verified private copies; see [external workflow assets](docs/extern
 
 ## Install and configure
 
-The host compatibility targets are DSH Web **0.2.1-rc.5** or **0.2.2-rc.1**
-and Windows Desktop **0.2.2-rc.1**, with Node.js **24**, Windows and PowerShell 7. ComfyUI and Strata must be installed separately. Python image/video
+The host compatibility target is DSH Web and Windows Desktop **0.2.2-rc.1**,
+with Node.js **24**, Windows and PowerShell 7. DSH 0.2.1-rc.5 lacks the
+managed-provider hook required by the durable integration. Its bundle loader
+may show `Unknown agent preset: local-image` instead of a version-specific
+message: check the DSH version and use the supported Host before trying again.
+Do not delete or migrate conversation history to resolve this compatibility
+error. ComfyUI and Strata must be installed separately. Python image/video
 helpers use the configured ComfyUI Python environment and its required libraries.
 Optional search uses a separately installed RustXNG. This source repository does
 not bundle those products, runtimes, Python environments or model weights.
@@ -63,6 +68,12 @@ malformed or invalid enabled configuration is an error, not a silent opt-out.
 
 On Windows, an optional [native system probe](docs/native-probe.md) avoids
 repeated PowerShell startup for process identity, RAM and commit observations.
+Protected external search also requires the configured, hash-verified native
+probe to confirm the current DSH Host and its loopback listener. If the probe,
+Host ownership or confirmation is unavailable, search remains on hold while
+local conversation and image production remain available. Existing sessions
+without sufficient search ownership evidence require maintenance review; do
+not delete their history or retry an uncertain external request.
 Controller remains a Node.js service; the probe does not perform inference or
 replace resource ownership, cancellation or recovery rules.
 
@@ -76,6 +87,10 @@ Keep the upstream DSH repository's `.runtime/` excluded from its Git history.
 The clone has its own Git history. Existing private installations may retain
 their data in `.runtime/media-studio`; moving plugin source does not require
 moving conversations, images or models.
+
+Desktop integration has been tested in isolated Hosts. The live Desktop
+profile, its existing plugins and the normal authenticated launcher still need
+qualification before these steps can be used as an installation procedure.
 
 Desktop keeps a separate source clone, for example under
 `%USERPROFILE%\.dsh\plugins\n3dypop\media-studio`. After initializing and
@@ -139,8 +154,9 @@ acceptance/rejection and stopping apply to the selected production. Search terms
 and page retrieval require their own explicit approvals.
 
 The Controller owns resource exclusion, process identity, jobs and receipts.
-Timeouts are reconciled against the original job/request ID; they are not a
-reason to submit another generation automatically. Review examines actual output
+After a timeout, inspect the original job/request ID. If its outcome cannot be
+verified, keep it pending and do not submit another generation automatically.
+Review examines actual output
 and records unmet or unverified criteria. Agent approval and user satisfaction
 are separate outcomes.
 

@@ -48,14 +48,14 @@ test('rejection reopens the same production for planning and its durable deliver
 });
 test('single-production cancellation does not abort the conversation or another production',async()=>{
   let aborted=0;const cancelled=[];const id=randomUUID(),other=randomUUID();
-  const p={id,attempts:[],revision:4,latestRunId:null},otherProduction={id:other,cancelRequested:false};
+  const p={id,sessionId:'owner',attempts:[],revision:4,latestRunId:null},otherProduction={id:other,cancelRequested:false};
   let response;
   await productionRoute({req:{method:'POST',headers:{'x-dsh-session':'owner'}},res:{},path:`/api/productions/${id}/cancel-owned`,url:new URL('http://local/'),role:'admin',store:{get:()=>null},engine:{work:new Map()},productions:{get:()=>p,cancel:(selected,session,input)=>{assert.equal(selected,id);assert.equal(session,'owner');assert.equal(input.expectedRevision,4);return {...p,cancelRequested:true};}},workflows:{},body:async()=>({expectedRevision:4,expectedRunId:null}),json:(_res,status,value)=>{response={status,value};},abortSession:()=>{aborted++;},cancelProductionPe:p=>cancelled.push(p.id)});
   assert.equal(response.status,202);assert.equal(aborted,0);assert.deepEqual(cancelled,[id]);assert.equal(otherProduction.cancelRequested,false);
 });
 test('PE cancellation failure still schedules recovery for that production without aborting the session',async()=>{
   const id=randomUUID(),runId=randomUUID(),launched=[];let aborts=0;
-  await assert.rejects(productionRoute({req:{method:'POST',headers:{'x-dsh-session':'owner'}},res:{},path:`/api/productions/${id}/cancel-owned`,url:new URL('http://local/'),role:'admin',store:{get:r=>({id:r,phase:'generating'})},engine:{work:new Map(),launch:(...args)=>launched.push(args)},productions:{get:()=>({id}),cancel:()=>({id,attempts:[runId]})},workflows:{},body:async()=>({expectedRevision:4,expectedRunId:runId}),json:()=>{},abortSession:()=>{aborts++;},cancelProductionPe:()=>{throw Error('PE cancellation unknown');}}),error=>error.status===503 && /停止の受付後/.test(error.message));
+  await assert.rejects(productionRoute({req:{method:'POST',headers:{'x-dsh-session':'owner'}},res:{},path:`/api/productions/${id}/cancel-owned`,url:new URL('http://local/'),role:'admin',store:{get:r=>({id:r,sessionId:'owner',productionId:id,phase:'generating',cancelRequested:true})},engine:{work:new Map(),launch:(...args)=>launched.push(args)},productions:{get:()=>({id}),cancel:()=>({id,sessionId:'owner',attempts:[runId]})},workflows:{},body:async()=>({expectedRevision:4,expectedRunId:runId}),json:()=>{},abortSession:()=>{aborts++;},cancelProductionPe:()=>{throw Error('PE cancellation unknown');}}),error=>error.status===503 && /停止の受付後/.test(error.message));
   await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(launched,[[runId,true]]);assert.equal(aborts,0);
 });
 const origin='http://127.0.0.1:3080';

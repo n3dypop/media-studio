@@ -2,12 +2,13 @@
 // frozen Comfy node schema. No actual ComfyUI job or user data are used.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,writeFile,rename,unlink,rmdir} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,writeFile,rename,rm} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {randomUUID,createHash} from 'node:crypto';
 import {join,resolve,sep} from 'node:path';
 import {tmpdir} from 'node:os';
-import {createPlugin} from '../apps/dsh-plugins/local-genai/index.mjs';
+import {openMutationJournal} from '../apps/dsh-plugins/local-genai/durable-journal.mjs';
+import {runDurableOwnedMutation,reconcileDurableOwnedMutation} from '../apps/dsh-plugins/local-genai/durable-coordinator.mjs';
 import {mossInputTemplate} from '../apps/controller/media-modes.mjs';
 import {WorkflowRegistry} from '../apps/controller/workflows.mjs';
 import {RunStore} from '../apps/controller/store.mjs';
@@ -34,8 +35,8 @@ function schemasFor(graph){
 }
 for(const scenario of ['t2i','i2i','i2i-custom','edit','enhanced'])test(`legacy ${scenario} response loss reconciles only proven owned saved evidence`,async t=>{
   const parent=resolve(tmpdir()),root=await mkdtemp(join(parent,'media-studio-legacy-http-'));assert.equal(root.startsWith(parent+sep),true);
-  let file,hold,store;
-  t.after(async()=>{for(const name of [file,hold].filter(Boolean))await unlink(name).catch(e=>{if(e.code!=='ENOENT')throw e;});for(const name of [join(root,'workflows','drafts'),join(root,'workflows'),root])await rmdir(name).catch(e=>{if(e.code!=='ENOENT')throw e;});store?.close();});
+  let file,hold,store,journal;
+  t.after(async()=>{journal?.close();store?.close();assert.ok(root.startsWith(parent+sep));await rm(root,{recursive:true,force:true});});
   const profile='moss-image-sft-int8-v1',base=JSON.parse(await readFile('workflows/approved/moss-image-sft-int8-v1.json','utf8'));
   const mode=scenario==='edit'?'edit':scenario.startsWith('i2i')?'i2i':'t2i',id='11111111-1111-4111-8111-111111111111',sha256='a'.repeat(64),sessionPrefix=createHash('sha256').update('session').digest('hex').slice(0,24);
   const binding={id,purpose:'input',sha256,width:512,height:768,comfyInputName:`controller-assets/${sessionPrefix}/${id}-${sha256}.png`};
@@ -50,19 +51,24 @@ for(const scenario of ['t2i','i2i','i2i-custom','edit','enhanced'])test(`legacy 
   let launches=0,post=0,alter=null;
   const server=createControllerServer({store,productions,workflows:registry,engine:{work:new Set(),launch(){launches++;}},token:'admin',dshToken:'synthetic-only',port,profile});
   await new Promise((ok,fail)=>server.once('error',fail).listen(port,'127.0.0.1',ok));t.after(async()=>{server.closeAllConnections();await new Promise(ok=>server.close(ok));});
-  const defs=new Map(),scope={},ctx={tools:{register:x=>defs.set(x.name,x),presentAs(){},guard(){}},attachments:{},llm:{resolveModelInfo:async()=>({inputModalities:['image']})},agents:{get:()=>null},effect:f=>f(),systemPrompt:{section(){},getSectionOrder:()=>0,suppressRuntimeContext(){}},on:()=>()=>{}};
-  const wrappedFetch=async(address,options)=>{const u=new URL(address);assert.equal(u.origin,'http://127.0.0.1:3090');const response=await fetch(`http://127.0.0.1:${port}${u.pathname}${u.search}`,options);if(options.method==='POST'){post++;assert.equal(response.status,202);await response.arrayBuffer();throw Error('lost after acceptance');}if(alter&&response.ok){const value=await response.json();alter(value);return new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});}return response;};
-  const plugin=await createPlugin(ctx,{role:'studio',runtimeRoot:root},{scopeOf:()=>scope,scopeChainOf:()=>[scope],defineTool:x=>x,loadConfiguration:async()=>({controllerUrl:'http://127.0.0.1:3090',token:'synthetic-only'}),fetch:wrappedFetch});t.after(()=>plugin.dispose());
-  let callId=0;const call=(name,args)=>defs.get(name).execute(args,{callId:`fixture-${++callId}`,signal:new AbortController().signal,agent:{session:{id:'session',requestHeader:()=>({config:{provider:'local-strata',model:'strata-core'}})}}});
-  const input={productionId:p.id,expectedRevision:bound.revision,workflowId:workflow.id,prompt:'  A portrait  ',negativePrompt:' text ',seed:'42',width:512,height:768,steps:20,enhancer:scenario==='enhanced',...(scenario==='i2i-custom'?{denoise:0.45}:{})};
-  let requestId;await assert.rejects(call('local_production_render',input),e=>(requestId=e.requestId,e.uncertain));
+  await mkdir(join(root,'data'));journal=await openMutationJournal(root);
+  const events=[],session={id:'session',surface:{nodes:[]},snapshotEvents:()=>events,deriveMessages:()=>[]},sessions={flush:async()=>true},persistence={flush:async()=>{},open:async(id,access)=>({id,access,read:async seq=>({events:events.filter(x=>x.seq===seq)}),close:async()=>{}})},common={journal,session,sessions,persistence,mapSessionId:id=>id,wireProof:async()=>true};
+  let step=0;const call=name=>{const callId=`fixture-${++step}`;events.push({seq:events.length,type:'tool/call',data:{callId,name,turn:1,step}});return callId;};
+  const requestId=randomUUID(),input={expectedRevision:bound.revision,workflowId:workflow.id,prompt:'  A portrait  ',negativePrompt:' text ',seed:'42',width:512,height:768,steps:20,enhancer:scenario==='enhanced',...(scenario==='i2i-custom'?{denoise:0.45}:{}),requestId};
+  const headers={Authorization:'Bearer synthetic-only','X-DSH-Session':'session','Content-Type':'application/json'};
+  const readProof=async()=>{const response=await fetch(`http://127.0.0.1:${port}/api/productions/${p.id}/run-by-request?${new URLSearchParams({requestId})}`,{headers});if(!response.ok)throw Error(`HTTP ${response.status}`);const value=await response.json();if(alter)alter(value);return value;};
+  const reconcile=()=>reconcileDurableOwnedMutation({...common,currentCallId:call('local_render_reconcile'),toolName:'local_render_reconcile',operation:'render',targetId:p.id,requestId,readProof});
+  await assert.rejects(runDurableOwnedMutation({...common,currentCallId:call('local_production_render'),toolName:'local_production_render',operation:'render',targetId:p.id,input,send:async()=>{post++;const response=await fetch(`http://127.0.0.1:${port}/api/productions/${p.id}/render`,{method:'POST',headers,body:JSON.stringify(input)});assert.equal(response.status,202);await response.arrayBuffer();throw Error('lost after acceptance');},readProof}),/lost after acceptance/);
+  journal.close();journal=await openMutationJournal(root);common.journal=journal;
   if(scenario==='enhanced'){
-    await assert.rejects(call('local_render_reconcile',{productionId:p.id,requestId}),/evidence differs/);
+    // The original request can be identified before enhancement begins; this
+    // proves admission only, not completion, cleanup or the effective prompt.
+    const accepted=await reconcile();assert.equal(accepted.value.run.phase,'queued');assert.equal(accepted.value.run.effectiveSpec,undefined);assert.equal(accepted.value.receipt.originalSpecHash,hash(accepted.value.run.spec));assert.equal(post,1);assert.equal(launches,1);
     return;
   }
-  await rename(file,hold);await assert.rejects(call('local_render_reconcile',{productionId:p.id,requestId}),/HTTP 409/);await rename(hold,file);
+  await rename(file,hold);await assert.rejects(reconcile(),/HTTP 409/);await rename(hold,file);
   const metadata=JSON.parse(bytes);metadata.rationale='Different saved snapshot';await writeFile(file,JSON.stringify(metadata));
-  await assert.rejects(call('local_render_reconcile',{productionId:p.id,requestId}),/HTTP 409/);await writeFile(file,bytes);
+  await assert.rejects(reconcile(),/HTTP 409/);await writeFile(file,bytes);
   for(const mutate of [
     x=>{x.run.sessionId='other';},
     x=>{x.run.spec.prompt='different';x.run.specHash=hash(x.run.spec);},
@@ -73,7 +79,7 @@ for(const scenario of ['t2i','i2i','i2i-custom','edit','enhanced'])test(`legacy 
     x=>{x.production.brief.mode='video';x.production.briefHash=hash(x.production.brief);x.run.spec.mode='video';x.run.spec.briefHash=x.production.briefHash;x.run.spec.workflow.mode='video';x.run.specHash=hash(x.run.spec);},
     ...['qwen-photo-v1','realesrgan-x4plus-v1','image-scale-v1'].map(profile=>x=>{x.production.brief.modelProfile=profile;x.production.briefHash=hash(x.production.brief);x.run.spec.modelProfile=profile;x.run.spec.briefHash=x.production.briefHash;x.run.spec.workflow.modelProfile=profile;x.run.specHash=hash(x.run.spec);}),
     ...(mode!=='t2i'?[x=>{x.run.spec.denoise=0.5;x.run.specHash=hash(x.run.spec);},x=>{x.run.spec.inputAsset.sha256='b'.repeat(64);x.run.specHash=hash(x.run.spec);}]:[]),
-  ]){alter=mutate;await assert.rejects(call('local_render_reconcile',{productionId:p.id,requestId}),/evidence differs|legacy render differs/);}
-  alter=null;const result=await call('local_render_reconcile',{productionId:p.id,requestId});
-  assert.equal(result.phase,'queued');assert.equal(store.get(result.runId).requestId,requestId);assert.equal(post,1);assert.equal(launches,1);
+  ]){alter=mutate;await assert.rejects(reconcile(),/unresolved/);}
+  alter=null;const result=await reconcile();
+  assert.equal(result.value.run.phase,'queued');assert.equal(store.get(result.value.run.id).requestId,requestId);assert.equal(post,1);assert.equal(launches,1);assert.equal(journal.pending('session')[0].state,'receipt');
 });

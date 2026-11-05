@@ -102,6 +102,22 @@ search start is an error; it is never silently converted to disabled. A
 configured-but-stopped search backend can still fail an approved search, and its
 enabled state is not proof of backend health.
 
+The Controller status reports `search.enabled` as the configured state and
+`search.availability` as `disabled`, `unprotected`, `unavailable`, or
+`requires-current-host-confirmation`. The last value means that the protected
+route is configured; it does not confirm that the current Host, turn, or
+search backend is ready.
+
+Every new external search also requires verified DSH Host/turn ownership and
+an authenticated, fresh loopback confirmation immediately before dispatch.
+Configure the native probe below; if it, the gateway, ownership or the saved
+history cannot be verified, search stays on hold without blocking local image
+production. A previous `searchTurnOwnership: false` Controller setting now
+disables search instead of selecting an unprotected path. Existing sessions
+without enough ownership evidence require maintenance; their conversation and
+saved results must be retained. A stop or confirmation failure cannot prove
+that an already-started external request was never sent.
+
 ## Optional native observations
 
 For the optional Windows-only `nativeProbe` Controller field and its build,

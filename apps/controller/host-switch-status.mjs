@@ -1,4 +1,4 @@
-// Read-only snapshot for an operator who has already stopped the old Host.
+// Read-only Controller snapshot for a Host-switch or maintenance preflight.
 // It does not fence new HTTP requests and is not a GPU or Host lease.
 export function controllerSwitchStatus({controllerId, closing, mutations, resourceOperation, store, engine, gate, inferenceScope, inferenceBySession, searches, search, mossPe, qwenPe, isIdle}) {
   const busy=new Set(), unknown=new Set();

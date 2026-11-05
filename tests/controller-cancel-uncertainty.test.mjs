@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:net';
 import {randomUUID} from 'node:crypto';
+import {mkdtemp,mkdir,rm,realpath} from 'node:fs/promises';
+import {join,sep} from 'node:path';
+import {tmpdir} from 'node:os';
 import {ApiError,RunStore} from '../apps/controller/store.mjs';
 import {ProductionStore} from '../apps/controller/productions.mjs';
 import {createControllerServer} from '../apps/controller/http.mjs';
-import {createPlugin} from '../apps/dsh-plugins/local-genai/index.mjs';
+import {openMutationJournal} from '../apps/dsh-plugins/local-genai/durable-journal.mjs';
+import {runDurableCancellation,runDurableOwnedMutation,reconcileDurableOwnedMutation} from '../apps/dsh-plugins/local-genai/durable-coordinator.mjs';
 
 const profile='moss-image-sft-int8-v1',session='fixture-session';
 async function fixture(t,{mossPe,search}={}){
@@ -43,14 +47,15 @@ test('pre-commit invalid target and revision remain definite 4xx without mutatio
 });
 
 test('DSH marks a post-commit cleanup error unresolved and blocks a new production',async t=>{
-  const f=await fixture(t,{mossPe:{cancelProduction(){throw error409();},work:new Set()}}),definitions=new Map(),scope={};
-  const ctx={tools:{register:x=>definitions.set(x.name,x),presentAs(){},guard(){}},attachments:{},llm:{},agents:{get:()=>null},effect:g=>g(),systemPrompt:{section(){},getSectionOrder:()=>0,suppressRuntimeContext(){}},on:()=>()=>{}};
-  const plugin=await createPlugin(ctx,{role:'studio',runtimeRoot:process.cwd()},{scopeOf:()=>scope,scopeChainOf:()=>[scope],defineTool:x=>x,loadConfiguration:async()=>({controllerUrl:'http://127.0.0.1:3090',token:'synthetic-only'}),fetch:(address,options)=>{const u=new URL(address);return fetch(f.root+u.pathname+u.search,options);}});
-  t.after(()=>plugin.dispose());let call=0;
-  const run=(name,args)=>definitions.get(name).execute(args,{callId:`review-${++call}`,signal:new AbortController().signal,agent:{session:{id:session}}});
-  await assert.rejects(run('local_production_cancel',{productionId:f.p.id}),error=>error.uncertain===true&&error.status===503);
+  const f=await fixture(t,{mossPe:{cancelProduction(){throw error409();},work:new Set()}}),base=await realpath(tmpdir()),root=await mkdtemp(join(base,'cancel-uncertainty-'));assert.ok(root.startsWith(base+sep));await mkdir(join(root,'data'));let journal=await openMutationJournal(root);t.after(async()=>{journal.close();assert.equal(await realpath(root),root);assert.ok(root.startsWith(base+sep));await rm(root,{recursive:true,force:true});});
+  const events=[],owner={id:session,surface:{nodes:[]},snapshotEvents:()=>events,deriveMessages:()=>[]},sessions={flush:async()=>true},persistence={flush:async()=>{},open:async(id,access)=>({id,access,read:async seq=>({events:events.filter(x=>x.seq===seq)}),close:async()=>{}})},common={journal,session:owner,sessions,persistence,mapSessionId:id=>id,wireProof:async()=>true};let step=0;const call=name=>{const callId=`review-${++step}`;events.push({seq:events.length,type:'tool/call',data:{callId,name,turn:1,step}});return callId;},id=randomUUID(),input={requestId:id};
+  await assert.rejects(runDurableCancellation({...common,currentCallId:call('local_production_cancel'),toolName:'local_production_cancel',targetId:f.p.id,input,send:async()=>{const response=await f.post(`/api/productions/${f.p.id}/cancel`,input);assert.equal(response.status,503);throw Error('HTTP 503: cleanup outcome unknown');},readProof:async()=>{throw Error('must not read');}}),/HTTP 503/);
   assert.equal(f.productions.get(f.p.id,session).cancelRequested,true);
-  await assert.rejects(run('local_production_create',{request:'test',criteria:[{id:'C1',description:'test'}],invariants:[],modelProfile:profile}),/previous mutation is unresolved/);
+  journal.close();journal=await openMutationJournal(root);common.journal=journal;
+  await assert.rejects(runDurableOwnedMutation({...common,currentCallId:call('local_production_create'),toolName:'local_production_create',operation:'create',input:{requestId:randomUUID()},correlationHash:'a'.repeat(64),send:async()=>{throw Error('must not send');},readProof:async()=>{throw Error('must not read');}}),/unresolved|pending|open|UNIQUE/i);
+  const readProof=async()=>{const response=await fetch(`${f.root}/api/productions/${f.p.id}/cancel-by-request?${new URLSearchParams({requestId:id})}`,{headers:{Authorization:'Bearer synthetic-only','X-DSH-Session':session}});assert.equal(response.status,200);return response.json();};
+  const recovered=await reconcileDurableOwnedMutation({...common,currentCallId:call('local_cancel_reconcile'),toolName:'local_cancel_reconcile',operation:'cancel',targetId:f.p.id,requestId:id,readProof});assert.equal(recovered.value.receipt.disposition,'accepted');assert.equal(journal.pending(session)[0].state,'receipt');
+  // The cancellation receipt proves acceptance only, not cleanup, process exit or GPU release.
 });
 
 test('admin run cancellation: post-commit 4xx cleanup failures remain unknown',async t=>{

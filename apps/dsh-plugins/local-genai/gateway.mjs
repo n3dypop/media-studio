@@ -3,9 +3,13 @@ import { loadConfiguration } from './index.mjs';
 import { loadDshLlmBindings, desktopPackagedRuntimeOption, withDesktopPackagedRuntime } from './runtime.mjs';
 import {createRuntimeConfig,runtimeRootOf} from '../shared/plugin-config.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
+import {pinSearchStopDatabase} from './search-stop-db.mjs';
+import {resetScopeFeature,observeScopeFeature} from './scope-feature.mjs';
+import {readFile,realpath,stat} from 'node:fs/promises';
+import {resolve,relative,isAbsolute} from 'node:path';
 
 export const name = 'local-genai-gateway';
-export const inject = ['llm'];
+export const inject = ['llm','sessions','sessionPersistence'];
 export const Config=withControllerSessionNamespace(withDesktopPackagedRuntime(createRuntimeConfig({allowWorkspaceRoot:true,allowUnknown:true})),{allowUnknown:true});
 
 export class CoreScopeError extends Error {
@@ -86,10 +90,46 @@ export async function createGateway(ctx, config, dependencies = {}) {
   const admission = createAdmission();
   const running = new Set();
   let closed = false;
+  let closedReason = null;
   let disposal;
+  let headerScope = null;
+  const observedSessions = new Set();
+  const ownerSessions=new Set(),registeredTurns=new Map(),userTurns=new Map(),ownerHostId=randomUUID();
+  let ownerContext=null,searchOpenGateway=null,setSearchOwnerStatus=()=>{},clearSearchOwnerStatus=()=>{},isManagedAgent=()=>false;
+  {
+    try{
+      const [{observeOwnHostBirth},{pinTurnOwnerDatabase},{createTurnOwnerLifecycle},status,roleScope]=await Promise.all([import('./host-birth.mjs'),import('./turn-owner.mjs'),import('./turn-owner-lifecycle.mjs'),import('./search-owner-status.mjs'),import('./role-scope.mjs')]);
+      setSearchOwnerStatus=status.setSearchOwnerStatus;clearSearchOwnerStatus=status.clearSearchOwnerStatus;
+      isManagedAgent=dependencies.isManagedAgent??roleScope.isManagedAgent;
+      const root=await realpath(runtimeRootOf(config,{allowWorkspaceRoot:true}));let birth,owner;
+      if(dependencies.createOwnerContext){({birth,owner}=await dependencies.createOwnerContext(root));}
+      else{const path=await realpath(resolve(root,'config/controller.json')),inside=relative(root,path),info=await stat(path);if(!inside||inside==='..'||inside.startsWith('../')||inside.startsWith('..\\')||isAbsolute(inside)||!info.isFile()||info.size>1024*1024)throw Error('Owner probe configuration is unavailable');const file=JSON.parse(await readFile(path,'utf8'));birth=await (dependencies.observeOwnHostBirth??observeOwnHostBirth)(root,file.nativeProbe);owner=(dependencies.pinTurnOwnerDatabase??pinTurnOwnerDatabase)(root);}
+      const lifecycle=createTurnOwnerLifecycle({owner,mapSessionId:id=>controllerSessionId(id,sessionMode),hostId:ownerHostId,sessions:ctx.sessions,persistence:ctx.sessionPersistence});
+      const {createSearchOpenGateway}=await import('./search-open-gateway.mjs');searchOpenGateway=await createSearchOpenGateway({token:settings.token,hostId:ownerHostId,isOpen:status.isSearchOwnerOpen});
+      ctx.on('session/event',(session,event)=>{if(event?.type!=='turn/end')return;const id=controllerSessionId(session?.id??'',sessionMode),turn=event.data?.turn;if(typeof id!=='string'||!Number.isSafeInteger(turn)||turn<1)return;setSearchOwnerStatus(id,turn,'ended');void lifecycle.end(session,event).then(confirmed=>{if(confirmed)setSearchOwnerStatus(id,turn,'completed');}).catch(()=>setSearchOwnerStatus(id,turn,'blocked'));},{global:true});
+      ownerContext={birth,owner,lifecycle};
+    }catch{ownerContext=null;if(searchOpenGateway){await searchOpenGateway.close();searchOpenGateway=null;}/* Search stays closed; local inference and image work can continue. */}
+  }
+
+  // Header preparation runs synchronously for the exact pi-ai provider call.
+  // The unguessable Controller scope is retained only while that call owns the
+  // serialized gateway; never attach it to a different provider or origin.
+  ctx.on('llm-pi-ai/request-headers',(request,_headers,next)=>{
+    const headers=next();
+    if(request?.provider!=='local-strata')return headers;
+    let actual;try{actual=new URL(request.baseURL);}catch{throw new CoreScopeError('Managed inference routing could not be verified.');}
+    const sessionId=controllerSessionId(request.sessionId??'__auxiliary__',sessionMode);
+    if(request.model!=='strata-core'||actual.origin!==settings.controllerUrl||!/^\/v1\/?$/.test(actual.pathname)||actual.search||actual.hash||actual.username||actual.password||!headerScope||headerScope.sessionId!==sessionId)throw new CoreScopeError('Managed inference scope could not be verified.');
+    headers.set('X-DSH-Session',headerScope.sessionId);
+    headers.set('X-DSH-Scope',headerScope.id);
+    observeScopeFeature(headerScope.sessionId,headerScope.id);
+    observedSessions.add(headerScope.sessionId);
+    return headers;
+  },{global:true,prepend:true});
 
   function close(error) {
     closed = true;
+    closedReason ??= error;
     admission.close(error);
   }
   async function post(path, body, sessionId, callerSignal, parseReceipt = false) {
@@ -153,12 +193,18 @@ export async function createGateway(ctx, config, dependencies = {}) {
             throw new CoreScopeError('The core scope receipt is incomplete; managed inference is closed. Do not repeat the start request.', { uncertain: true, requestId });
           }
         } catch (error) { close(error); throw error; }
+        let ownsHeaderScope=false;
         try {
+          if(headerScope){const error=new CoreScopeError('A managed inference scope is already active.');close(error);throw error;}
+          headerScope={id:scope.id,sessionId};
+          ownsHeaderScope=true;
+          resetScopeFeature(sessionId);
           options.signal?.throwIfAborted();
           // DSH owns the (possibly frozen) options and upstream signal. Delegate
           // return/error too, so upstream cleanup finishes before scope/end.
           yield* next();
         } finally {
+          if(ownsHeaderScope)headerScope=null;
           try {
             // A caller abort or plugin disposal cannot abort scope cleanup.
             await post('/api/core-scope/end', { id: scope.id }, sessionId);
@@ -175,20 +221,43 @@ export async function createGateway(ctx, config, dependencies = {}) {
   // user turn may contain multiple model calls and retries. Only an actual
   // user message may reopen conversation-scoped search after a stop.
   ctx.on('agent/pre-step', async ({agent,turn,step,messages,signal},next)=>{
+    let cancellation,stopFailure;
+    if(!isManagedAgent(agent))return next();
     const route=agent?.options;
-    if(step===1&&route?.provider==='local-strata'&&route?.model==='strata-core'&&Array.isArray(messages)&&messages.some(message=>message?.source?.kind==='user')){
-      const id=agent?.session?.id,events=agent?.session?.snapshotEvents?.();
-      const recorded=Array.isArray(events)?events.findLast(event=>event.type==='turn/start')?.data?.turn:null;
-      if(typeof id==='string'&&Number.isSafeInteger(turn)&&turn>0&&recorded===turn){
-        const controllerId=controllerSessionId(id,sessionMode);
+    if(closed&&route?.provider==='local-strata'&&route?.model==='strata-core')throw closedReason??new CoreScopeError('Managed inference is closed; no operation was sent.',{uncertain:true});
+    const id=agent?.session?.id,events=agent?.session?.snapshotEvents?.(),recorded=Array.isArray(events)?events.findLast(event=>event.type==='turn/start')?.data?.turn:null;
+    const controllerId=typeof id==='string'?controllerSessionId(id,sessionMode):null;
+    if(typeof controllerId==='string'&&Number.isSafeInteger(turn)&&turn>0&&recorded===turn&&step===1&&Array.isArray(messages)&&messages.some(message=>message?.source?.kind==='user')&&(userTurns.get(controllerId)??0)<turn)userTurns.set(controllerId,turn);
+    // The pinned Desktop Host can expose an initial default model here even
+    // though it switches to the managed model during the same first step.
+    // The owner records the user turn before that step so a
+    // search tool cannot run before ownership is registered.
+    if((step===1||(route?.provider==='local-strata'&&route?.model==='strata-core'))&&typeof controllerId==='string'&&Number.isSafeInteger(turn)&&turn>0&&recorded===turn&&userTurns.get(controllerId)===turn){
+        if((registeredTurns.get(controllerId)??0)<turn){registeredTurns.set(controllerId,turn);
+        let ownerReady=false;
+        ownerSessions.add(controllerId);setSearchOwnerStatus(controllerId,turn,'pending');try{if(!ownerContext)throw Error('Search owner unavailable');ownerContext.owner.activate({sessionId:controllerId,hostId:ownerHostId,identity:ownerContext.birth});if(ownerContext.owner.needsLegacyAttestation({sessionId:controllerId,hostId:ownerHostId,turn})){await ownerContext.owner.attestLegacy({session:agent.session,sessions:ctx.sessions,persistence:ctx.sessionPersistence,mapSessionId:value=>controllerSessionId(value,sessionMode),turn:turn-1,hostId:ownerHostId});throw Error('Legacy search needs maintenance approval');}await ownerContext.lifecycle.begin(agent.session,turn);if(!searchOpenGateway)throw Error('Search gateway unavailable');const receipt=await post('/api/search-proposals/gateway-register',{hostId:ownerHostId,port:searchOpenGateway.port},controllerId,undefined,true);if(receipt?.sessionId!==controllerId||receipt?.hostId!==ownerHostId||receipt?.registered!==true)throw Error('Search gateway registration differs');ownerReady=true;}catch{setSearchOwnerStatus(controllerId,turn,'blocked');}
+        if(ownerReady){
+        let stopGuard;
+        {
+          try{stopGuard=(dependencies.pinSearchStopDatabase??pinSearchStopDatabase)(runtimeRootOf(config,{allowWorkspaceRoot:true}));}
+          catch{const error=new CoreScopeError('Search stop state cannot be verified; managed inference is closed. Previously claimed external requests may still have been sent.',{uncertain:true});close(error);throw error;}
+        }
         // The registration must settle even when the user stops while it is in
         // flight; otherwise a late registration could reopen the stopped turn.
-        const registration=post('/api/search-proposals/user-turn',{turn},controllerId,undefined,true).then(receipt=>{
+        const registration=post('/api/search-proposals/user-turn',{turn,hostId:ownerHostId},controllerId,undefined,true).then(receipt=>{
           if(receipt?.sessionId!==controllerId||receipt?.turn!==turn)throw new Error('Search turn receipt differs.');
+          setSearchOwnerStatus(controllerId,turn,signal?.aborted?'blocked':'active');
         });
-        let cancellation;
         const onAbort=()=>{
           if(cancellation)return;
+          setSearchOwnerStatus(controllerId,turn,'blocked');
+          if(stopGuard)try{stopGuard.stop(controllerId,turn);}catch{
+            stopFailure=new CoreScopeError('The search stop could not be durably recorded. Keep search closed; an external request may already have been sent.',{uncertain:true});close(stopFailure);
+            // The DSH session-controller relays agent/error as a live
+            // api-session/error event even after pre-step returned. This is
+            // a notification only: it is not durable delivery evidence.
+            try{ctx.emit?.('agent/error',{agent,turn,step,error:stopFailure});}catch{/* The persistent recovery boundary remains unresolved. */}
+          }
           // Even a lost or malformed registration receipt may have committed;
           // cancel the exact turn once after the local attempt settles.
           cancellation=registration.then(()=>{},()=>{}).then(()=>post('/api/search-proposals/cancel-turn',{turn},controllerId,undefined)).catch(()=>{});
@@ -197,11 +266,13 @@ export async function createGateway(ctx, config, dependencies = {}) {
         signal?.addEventListener('abort',onAbort,{once:true});
         if(signal?.aborted)onAbort();
         try{await registration;}
-        catch{/* Search itself fails closed without a matching turn. */}
-        if(signal?.aborted){onAbort();await cancellation;signal.throwIfAborted();}
-      }
+        catch{setSearchOwnerStatus(controllerId,turn,'blocked');/* Search itself fails closed without a matching turn. */}
+        if(signal?.aborted){onAbort();await cancellation;if(stopFailure)throw stopFailure;signal.throwIfAborted();}
+        }
+        }
     }
-    return next();
+    try{const result=await next();if(signal?.aborted&&cancellation)await cancellation;if(stopFailure)throw stopFailure;return result;}
+    catch(error){if(signal?.aborted&&cancellation)await cancellation;if(stopFailure)throw stopFailure;throw error;}
   },{global:true,prepend:true});
   ctx.on('llm/stream', stream, { global: true, prepend: true });
   return {
@@ -209,9 +280,15 @@ export async function createGateway(ctx, config, dependencies = {}) {
     dispose() {
       if (!disposal) {
         close(new CoreScopeError('The core gateway is closing; no new scope was sent.'));
+        for(const sessionId of observedSessions)resetScopeFeature(sessionId);
+        observedSessions.clear();
+        for(const sessionId of ownerSessions)clearSearchOwnerStatus(sessionId);
+        ownerSessions.clear();
+        registeredTurns.clear();
+        userTurns.clear();
         // Do not call iterator.return(), forge an upstream signal, or end a
         // still-running scope. Cordis waits for this disposer before unload.
-        disposal = Promise.allSettled([...running]).then(() => {});
+        disposal = Promise.allSettled([...running,...(searchOpenGateway?[searchOpenGateway.close()]:[])]).then(() => {});
       }
       return disposal;
     },

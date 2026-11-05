@@ -6,6 +6,8 @@ import { RunStore } from './store.mjs';
 import { RunEngine } from './engine.mjs';
 import { ComfyAdapter } from './comfy.mjs';
 import { createControllerServer } from './http.mjs';
+import { DurableWireStore } from './durable-wire-store.mjs';
+import { DurableWireJournalReader } from './durable-wire-journal.mjs';
 import { createEpochVerifier } from './epoch.mjs';
 import { createRetiredEpochVerifier } from './server-recovery.mjs';
 import { StrataClient } from './strata.mjs';
@@ -15,6 +17,7 @@ import { observeWindowsResources,observeOutputDisks } from './resources.mjs';
 import { WorkflowRegistry,MODEL_PROFILES } from './workflows.mjs';
 import { ProductionStore } from './productions.mjs';
 import { SearchService } from './search/service.mjs';
+import { createSearchOpenHandshake } from './search/open-handshake.mjs';
 import { loadSearchConfiguration } from './search/config.mjs';
 import {AssetStore} from './assets.mjs';
 import {RETIRED_VIDEO_PROFILES} from './media-modes.mjs';
@@ -24,14 +27,17 @@ import {createStrataOwnedChildReader} from './strata-owned-processes.mjs';
 import {strataPythonExecutable} from './service-paths.mjs';
 import {createComfyProgressMonitor} from './monitor-progress.mjs';
 import {createConfiguredNativeProbe} from './native-probe.mjs';
+import {assertNoControllerPreopenGuard} from './search/cutover-preopen-guard.mjs';
 
 if(process.env.MEDIA_STUDIO_HOME&&!isAbsolute(process.env.MEDIA_STUDIO_HOME))throw Error('MEDIA_STUDIO_HOME must be absolute');
 const packageRoot=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 const root=resolve(process.env.MEDIA_STUDIO_HOME||packageRoot);
+assertNoControllerPreopenGuard(root);
 const settings=JSON.parse(readFileSync(join(root,'config/environment.json'),'utf8'));
 const config=JSON.parse(readFileSync(join(root,'config/controller.json'),'utf8'));
 if(config.experimentalHostIsolation!==undefined&&config.experimentalHostIsolation!==false)throw new Error('Host isolation is incomplete; strict Controller startup is disabled.');
 if(Object.hasOwn(config,'fixtureDesktopPaths'))throw new Error('Fixture-only Desktop paths are not available in the production Controller.');
+if(config.searchTurnOwnership!==undefined&&typeof config.searchTurnOwnership!=='boolean')throw new Error('Invalid search turn ownership configuration');
 if(!Number.isInteger(config.port)||config.port<1024||config.port>65535||!Object.hasOwn(MODEL_PROFILES,config.profile)) throw new Error('Invalid controller configuration');
 const nativeProbe=await createConfiguredNativeProbe(config.nativeProbe,root);
 const epochProbe=nativeProbe?{probe:nativeProbe.epoch}:{};
@@ -53,7 +59,11 @@ const http=await import('node:http');
 const listener=http.createServer();
 await new Promise((resolve,reject)=>{listener.once('error',reject);listener.listen(config.port,'127.0.0.1',resolve);});
 try {
+  // A maintenance process can persist the guard while this process is waiting
+  // for its listener. Recheck immediately before the first DB constructor.
+  assertNoControllerPreopenGuard(root);
   store=new RunStore(join(data,'controller.db'));
+  const wireStore=new DurableWireStore(store),wireReader=new DurableWireJournalReader(root);
   const profilePaths=Object.fromEntries(Object.keys(MODEL_PROFILES).filter(id=>!RETIRED_VIDEO_PROFILES.includes(id)).map(id=>[id,join(packageRoot,'workflows/approved',id+'.json')]));
   const assets=new AssetStore({store,root,inputRoot:settings.inputDirectory,pythonExecutable:settings.comfyPythonExecutable});
   const adapter=new ComfyAdapter({baseUrl:comfyUrl,outputRoot:join(root,'outputs'),profilePath:profilePaths[config.profile],modelProfile:config.profile,profilePaths,assets});
@@ -61,7 +71,11 @@ try {
   const verifyRetiredEpoch=createRetiredEpochVerifier({expectedExecutable:settings.comfyPythonExecutable,baseUrl:comfyUrl});
   const productions=new ProductionStore(store,{defaultModelProfile:config.profile,assets}),workflows=new WorkflowRegistry({root,adapter,assets});
   const searchConfig=loadSearchConfiguration(root);
-  const search=new SearchService({root,...searchConfig});
+  // Search is always ownership- and handshake-protected. Legacy explicit false
+  // disables search; it never selects an unprotected path. A missing probe
+  // leaves search closed without disabling local generation.
+  const openHandshake=nativeProbe?createSearchOpenHandshake({store,ownerProbe:nativeProbe,token:dshToken}):null;
+  const search=new SearchService({root,...searchConfig,enabled:searchConfig.enabled!==false&&config.searchTurnOwnership!==false,store,requireTurnOwner:true,ownerProbe:nativeProbe,requireGatewayOpen:true,openHandshake});
   let gate=null,strata=null,enhancer=null,verifyStrata=null,readStrataChildren=null;
   const strataConfig=JSON.parse(readFileSync(join(root,'config/strata.json'),'utf8'));
   if(strataConfig.enabled) {
@@ -111,7 +125,7 @@ try {
     });
     listener.closeIdleConnections();
   };
-  server=createControllerServer({store,engine,token,dshToken,productions,workflows,search,gate,strata,assets,mossPe,mossPeEnabled:config.mossPeEnabled===true,qwenPe,qwenPeEnabled:config.qwenPeEnabled===true,monitorTelemetry,monitorProgress,outputRoot:join(root,'outputs'),port:config.port,comfyUrl,profile:config.profile,onShutdown:shutdown});
+  server=createControllerServer({store,engine,token,dshToken,productions,workflows,search,gate,strata,assets,mossPe,mossPeEnabled:config.mossPeEnabled===true,qwenPe,qwenPeEnabled:config.qwenPeEnabled===true,monitorTelemetry,monitorProgress,wireStore,wireReader,outputRoot:join(root,'outputs'),port:config.port,comfyUrl,profile:config.profile,onShutdown:shutdown});
   listener.on('request',(req,res)=>server.emit('request',req,res));
   listener.requestTimeout=server.requestTimeout;listener.headersTimeout=server.headersTimeout;
   process.on('SIGINT',()=>{if(server.isIdle())shutdown();});

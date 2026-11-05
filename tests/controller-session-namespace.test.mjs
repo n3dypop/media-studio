@@ -24,9 +24,10 @@ test('Desktop gateway consistently namespaces inference scope and search turn re
   const gateway=await createGateway({on(event,handler){hooks.set(event,handler);return ()=>{};}},{runtimeRoot:process.cwd(),controllerSessionNamespace:'desktop'},{
     loadConfiguration:async()=>({controllerUrl:'http://127.0.0.1:3000',token:'synthetic-credential'}),
     loadDshLlmBindings:async()=>({LlmError:class extends Error{},IMAGE_OFFLOAD_REQUIRED_CODE:'synthetic'}),
+    isManagedAgent:()=>true,createOwnerContext:async()=>({birth:{},owner:{activate(){},needsLegacyAttestation(){return false;},async begin(){},async complete(){}}}),pinSearchStopDatabase:()=>({stop(){}}),
     fetch:async(url,options)=>{
       const path=new URL(url).pathname,sessionId=options.headers['X-DSH-Session'],body=JSON.parse(options.body);sent.push({path,sessionId,body});
-      const value=path.endsWith('/start')?{scope:{id:'scope',sessionId}}:path.endsWith('/user-turn')?{sessionId,turn:body.turn}:{};
+      const value=path.endsWith('/start')?{scope:{id:'scope',sessionId}}:path.endsWith('/gateway-register')?{sessionId,hostId:body.hostId,registered:true}:path.endsWith('/user-turn')?{sessionId,turn:body.turn}:{};
       return new Response(JSON.stringify(value),{status:200,headers:{'Content-Type':'application/json'}});
     }
   });
@@ -34,7 +35,7 @@ test('Desktop gateway consistently namespaces inference scope and search turn re
   await hooks.get('agent/pre-step')({agent,turn:3,step:1,messages:[{source:{kind:'user'}}]},()=>{});
   const iterator=gateway.stream({provider:'local-strata',model:'strata-core',sessionId:'session-1',messages:[]},()=> (async function*(){yield 'ok';})());
   assert.deepEqual(await iterator.next(),{value:'ok',done:false});await iterator.return();
-  assert.deepEqual(sent.map(row=>row.path),['/api/search-proposals/user-turn','/api/core-scope/start','/api/core-scope/end']);
+  assert.deepEqual(sent.map(row=>row.path),['/api/search-proposals/gateway-register','/api/search-proposals/user-turn','/api/core-scope/start','/api/core-scope/end']);
   assert.ok(sent.every(row=>row.sessionId==='desktop:session-1'));
   await gateway.dispose();
 });

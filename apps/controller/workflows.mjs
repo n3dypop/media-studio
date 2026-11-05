@@ -594,8 +594,9 @@ export class WorkflowRegistry {
     let checked;
     try { checked = validateWorkflowGraph(graph, { objects, models: selected.models,modelProfile,assetBinding:inputAsset }); }
     catch(error) {
-      // This validation is pure and precedes both file creation and production
-      // binding. A definite graph rejection must not look like an uncertain write.
+      // Graph validation precedes workflow snapshot creation and production
+      // binding. Earlier asset binding may already have copied an owned input
+      // into the ComfyUI input cache; rejection does not mean zero side effects.
       const rejected=new Error(`Workflow validation failed: ${error.message}`);rejected.status=400;throw rejected;
     }
     const snapshot = { schemaVersion: mode!=='t2i'?3:modelProfile===MOSS_PROFILE?2:1,...(mode!=='t2i'?{mode,inputAsset}:{}), id: randomUUID(), productionId, createdAt: new Date().toISOString(),

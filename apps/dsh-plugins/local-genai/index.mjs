@@ -11,9 +11,10 @@ import {dshPreflightDiagnostic} from './preflight-diagnostic.mjs';
 import {deliveryPosition, visibleDelivery} from './evaluation-evidence.mjs';
 import {createRuntimeConfig,runtimeRootOf} from '../shared/plugin-config.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
+import {createDurableRuntime} from './durable-runtime.mjs';
 
 export const name = 'local-genai';
-export const inject = ['tools', 'attachments', 'llm', 'systemPrompt', 'agents'];
+export const inject = ['tools', 'attachments', 'llm', 'systemPrompt', 'agents', 'sessions', 'sessionPersistence'];
 export const Config=withControllerSessionNamespace(withDesktopPackagedRuntime(createRuntimeConfig({allowWorkspaceRoot:true,allowUnknown:true})),{allowUnknown:true});
 const STOPPED = new Set(['completed', 'failed', 'cancelled', 'needs_attention', 'recovery_required']);
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -278,6 +279,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   if (getScope(ctx) === undefined) throw new Error('local-genai must be mounted inside a dedicated agent preset, never at Host root.');
   const scopeChainOf = dependencies.scopeChainOf ?? (await (dependencies.loadDshScopeBindings??loadDshScopeBindings)(bindingOptions())).scopeChainOf;
   const allowedTools = new Set([...NATIVE_TOOLS.filter(name => role !== 'image-generation' || name !== 'local_workflow_draft'), ...(['image-generation', 'studio'].includes(role) ? ['local_image_prepare'] : []), ...(role === 'studio' ? ['local_moss_official_prepare','local_qwen21_prepare','local_prepared_render','local_moss_pe_start','local_moss_pe_result','local_moss_pe_decide','local_moss_pe_reconcile','local_qwen_pe_start','local_qwen_pe_result','local_qwen_pe_decide','local_qwen_pe_reconcile', 'local_input_images', 'local_asset_import', 'local_asset_view', 'local_production_iteration', 'local_production_history', 'local_production_feedback', 'local_resource_status', 'skill'] : []), 'ask_user_question']);
+  for(const name of ['local_asset_reconcile','local_production_action_reconcile','local_search_reconcile','local_pe_receipt_reconcile','local_cancel_reconcile','local_mutation_pending'])allowedTools.add(name);
   const settings = await (dependencies.loadConfiguration ?? loadConfiguration)(config);
   const fetchImpl = dependencies.fetch ?? globalThis.fetch;
   const sleep = dependencies.sleep ?? delay;
@@ -316,29 +318,11 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       throw new ControllerError(method === 'POST' ? 'Mutation response is unknown. Do not resend or replace it; reconcile the saved request identity.' : 'Controller read did not complete.', { uncertain: method === 'POST', requestId: body?.requestId });
     }
   }
+  const durable=await createDurableRuntime({root:runtimeRootOf(config,{allowWorkspaceRoot:true}),ctx,sessionIdentity,mapSessionId:id=>controllerSessionId(id,sessionMode),request,requestIdFor,expectedCreateBrief,errorFactory:(message,options)=>new ControllerError(message,options)});
   async function mutate(path, body, exec, { allowUncertain = false, signal = exec.signal, validateResult = productionValue } = {}) {
-    const sessionId = sessionIdentity(exec); const state = stateFor(sessionId);
-    if (state.uncertain.length && !allowUncertain) throw new ControllerError(`A previous mutation is unresolved; do not send another. Request id: ${state.uncertain[0].requestId ?? 'not assigned'}.`, { uncertain: true, requestId: state.uncertain[0].requestId });
-    if (state.active && !allowUncertain) throw new ControllerError('Another mutation is in progress for this conversation.');
-    // Cancellation may run alongside a mutation, but neither operation may
-    // release the other's admission. Preserve each uncertain result separately.
-    state.active++;
-    try {
-      const result = await request(path, { sessionId, method: 'POST', body, signal });
-      try { validateResult(result); }
-      catch { throw new ControllerError('Mutation receipt is incomplete. Do not resend or replace it; reconcile the saved request identity.', { uncertain: true, requestId: body?.requestId }); }
-      return result;
-    }
-    catch (error) {
-      if (error.uncertain) {
-        const id=body?.requestId??null;
-        state.uncertain.push({path,requestId:id,body:structuredClone(body)});
-        if(id)error.message+=` Request id: ${id}.`;
-      }
-      throw error;
-    }
-    finally { state.active--; }
+    return durable.mutate(path,body,exec,{allowUncertain,signal,validateResult});
   }
+  const reconcileTool=operation=>({create:'local_production_reconcile_create','asset-import':'local_asset_reconcile','workflow-draft':'local_workflow_reconcile','prepared-render':'local_render_reconcile',render:'local_render_reconcile',evaluate:'local_production_action_reconcile',iteration:'local_production_action_reconcile',feedback:'local_production_action_reconcile','search-proposal':'local_search_reconcile',cancel:'local_cancel_reconcile'})[operation]??(/^(moss|qwen)-pe-(start|decision|reconcile)$/.test(operation)?'local_pe_receipt_reconcile':'maintenance');
   async function requestCancel(productionId, exec) {
     // Cleanup has a separate deadline: the caller/lifetime signal may already be aborted.
     return mutate(`/api/productions/${encodeURIComponent(productionId)}/cancel`, {}, exec, { allowUncertain: true, signal: AbortSignal.timeout(15000) });
@@ -474,7 +458,18 @@ export async function createPlugin(ctx, config, dependencies = {}) {
         if (args.mode !== undefined && !MODES.includes(args.mode)) throw new ControllerError('Unknown media operation.');
         const exec = { ...originalExec, signal: AbortSignal.any([originalExec.signal, lifetime.signal]) };
         const promise = Promise.resolve().then(() => execute(args, exec)); running.add(promise);
-        try { return await promise; } finally { running.delete(promise); }
+        try { const value=await promise,receipts=durable?.takeReceipts(exec.callId);return receipts?{...value,journalReceipts:receipts}:value; }
+        catch(error){
+          // A handler may fail after its Controller mutation was accepted,
+          // including while loading an artifact or formatting a result. The
+          // receipt was not delivered, so leave it pending and expose only
+          // identities obtained from this session's actual journal. Rebinding
+          // and acknowledgement remain separate read-only operations.
+          durable?.takeReceipts(exec.callId);
+          let pending;try{pending=durable.pending(exec,{currentCallOnly:true});}catch{throw new ControllerError('The operation state cannot be inspected. Do not resend; use local_mutation_pending or contact maintenance.',{uncertain:true});}
+          if(pending.length)throw new ControllerError(`The operation or its result delivery remains unresolved. Do not resend. Reconcile each exact identity without repeating the operation: ${JSON.stringify(pending.map(item=>({...item,reconcileWith:reconcileTool(item.operation)})))}. Use local_mutation_pending to recover these identities later. A cancellation receipt confirms acceptance only, not cleanup.`,{uncertain:true,requestId:pending.length===1?pending[0].requestId:null});
+          throw error;
+        } finally { running.delete(promise); }
       },
     });
     definitions.push(definition); ctx.tools.register(definition);
@@ -517,7 +512,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     avoid: { type: 'array', items: { type: 'string' }, description: 'Things the user asked to avoid.' },
     usage: { type: 'string', description: 'Intended use when known.' },
     steps: { type: 'array', items: { type: 'string' }, description: 'Planned operations, excluding unrequested generation.' },
-    modelProfile: { ...modelProfileParameter, ...(role === 'integrated' ? {} : { required: true }) },
+    modelProfile: { ...modelProfileParameter, ...(role === 'integrated'||durable ? {} : { required: true }) },
     mode: modeParameter,
     inputAssetId: { type: 'string', description: 'Imported generator input; required for i2i, edit, and upscale. Any future video profile must define its own input requirements.' },
     inputAssetIds: { type: 'array', items: { type: 'string' }, description: 'For official MOSS or Qwen profiles: ordered generator inputs, explicitly imported with input purpose. MOSS edit source must be first. Distinct from observation-only references.' },
@@ -530,6 +525,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   register('local_production_reconcile_create', 'Read and verify one previously uncertain production create using its exact request ID. Never resend the create. Missing or mismatched evidence remains unresolved.', {
     requestId: requiredString('The exact request ID returned for the uncertain production create.'),
   }, async (args, exec) => {
+    if(durable){const value=await durable.reconcile({operation:'create',requestId:args.requestId,exec});if(value.receipt?.state==='rejected')return {state:'rejected',requestId:args.requestId,reconciled:true};return {production:productionValue({production:value.productions[0]}),requestId:args.requestId,reconciled:true};}
     const sessionId=sessionIdentity(exec),state=stateFor(sessionId);
     const candidates=state.uncertain.filter(x=>x.path==='/api/productions'&&x.requestId===args.requestId);
     if(state.active||candidates.length!==1)throw new ControllerError('The exact uncertain create cannot be uniquely reconciled while other operations are active.');
@@ -543,6 +539,14 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     state.uncertain.splice(state.uncertain.indexOf(pending),1);
     return {production:productionValue({production:p}),requestId:args.requestId,reconciled:true,otherUnresolved:state.uncertain.length};
   });
+  if(durable){
+    register('local_mutation_pending','List this conversation’s unresolved owned operations and their request identities without sending or retrying them. Use the matching read-only reconciliation; missing or uncertain evidence remains on hold.',{},async(_args,exec)=>({pending:durable.pending(exec),guidance:'Do not resend or replace a pending operation. Reconcile the exact operation, requestId and targetId using the matching read-only tool; if its identity or evidence is unavailable, ask maintenance.'}));
+    register('local_asset_reconcile','Read a previously accepted, rejected or administratively abandoned image import by its exact request ID without reimporting.',{requestId:requiredString('The original image import request ID.')},async(args,exec)=>{const value=await durable.reconcile({operation:'asset-import',requestId:args.requestId,exec});return {...(value.asset?{asset:value.asset}:{}),state:value.receipt.state,requestId:args.requestId,reconciled:true};});
+    register('local_production_action_reconcile','Read a previously accepted or rejected production evaluation, iteration or feedback by its exact request ID without repeating it.',{productionId:productionParameter,requestId:requiredString('The original request ID.'),operation:{type:'string',required:true,enum:['evaluate','iteration','feedback']}},async(args,exec)=>{const value=await durable.reconcile({operation:args.operation,targetId:args.productionId,requestId:args.requestId,exec});if(value.receipt?.state==='rejected')return {state:'rejected',requestId:args.requestId,reconciled:true};return {production:productionValue(value),result:value.evaluation??value.plan??value.feedback,requestId:args.requestId,reconciled:true};});
+    register('local_cancel_reconcile','Read the acceptance or rejection of an existing stop request. Acceptance does not prove resource cleanup.',{productionId:productionParameter,requestId:requiredString('The original stop request ID.')},async(args,exec)=>{const value=await durable.reconcile({operation:'cancel',targetId:args.productionId,requestId:args.requestId,exec});if(value.receipt?.state==='rejected')return {state:'rejected',requestId:args.requestId,reconciled:true,guidance:'The stop was not accepted.'};return {production:productionValue(value),receipt:value.receipt,requestId:args.requestId,reconciled:true,guidance:'Acceptance does not prove resource cleanup.'};});
+    register('local_search_reconcile','Read a previously saved, rejected or administratively abandoned search proposal by its exact request ID. No search or page access is performed.',{requestId:requiredString('The original search proposal request ID.')},async(args,exec)=>{const value=await durable.reconcile({operation:'search-proposal',requestId:args.requestId,exec});return ['abandoned','rejected'].includes(value.receipt.state)?{state:value.receipt.state,requestId:args.requestId,reconciled:true}:searchResult(searchProposalValue(value,{sessionId:sessionIdentity(exec)}));});
+    register('local_pe_receipt_reconcile','Read a previously accepted or rejected prompt-enhancer request by its exact request ID. This does not repeat execution or establish GPU cleanup.',{requestId:requiredString('The original PE request ID.'),targetId:requiredString('Production ID for a start; PE run ID for decision or reconcile.'),operation:{type:'string',required:true,enum:['moss-pe-start','moss-pe-decision','moss-pe-reconcile','qwen-pe-start','qwen-pe-decision','qwen-pe-reconcile']}},async(args,exec)=>{const value=await durable.reconcile({operation:args.operation,targetId:args.targetId,requestId:args.requestId,exec});if(value.receipt?.state==='rejected')return {state:'rejected',requestId:args.requestId,reconciled:true};return {production:productionValue(value),runId:value.run.id,phase:value.run.phase,receipt:value.receipt,guidance:'Acceptance does not prove completion or GPU cleanup.'};});
+  }
   register('local_workflow_catalog', role === 'image-generation' ? 'Read actual image model names, availability, approved template identities and generation limits. No graph editing, generation, installation or download occurs.' : 'Read actual capability availability, model names, selected profile templates, node schemas and limits. Pass mode and imported inputAssetId when applicable. No installation, download or generation occurs.', { modelProfile: modelProfileParameter, mode: modeParameter, inputAssetId: { type: 'string' } }, async (args, exec) => {
     const query = new URLSearchParams(Object.fromEntries(['modelProfile', 'mode', 'inputAssetId'].filter(key => args[key] !== undefined).map(key => [key, args[key]])));
     const result = await request('/api/workflow-catalog' + (query.size ? `?${query}` : ''), { sessionId: sessionIdentity(exec), signal: exec.signal });
@@ -656,6 +660,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   register('local_workflow_reconcile','Read and verify an uncertain workflow preparation using its exact request ID and production ID. Never submit another draft. Missing or conflicting evidence remains unresolved.',{
     productionId:productionParameter,requestId:requiredString('Exact request ID from the uncertain workflow preparation.'),
   },async(args,exec)=>{
+    if(durable){const value=await durable.reconcile({operation:'workflow-draft',targetId:args.productionId,requestId:args.requestId,exec});if(['rejected','abandoned'].includes(value.receipt?.state))return {state:value.receipt.state,requestId:args.requestId,reconciled:true,guidance:'No workflow was bound by this request. Input cache or a workflow file may remain; do not assume files were removed.'};return {production:productionValue(value),workflow:workflowMetadata(value.workflow),requestId:args.requestId,reconciled:true};}
     const sessionId=sessionIdentity(exec),state=stateFor(sessionId),matches=state.uncertain.filter(x=>x.path==='/api/workflows/draft'&&x.requestId===args.requestId);
     if(state.active||matches.length!==1)throw new ControllerError('The exact uncertain workflow cannot be uniquely reconciled while other operations are active.');
     const pending=matches[0],b=pending.body;
@@ -715,6 +720,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   register('local_render_reconcile','Recover the saved run ID for an uncertain prepared render or an unenhanced MOSS SFT INT8 legacy render by its exact request ID. Read and verify only; do not resubmit. A missing record is not evidence of failure.',{
     productionId:productionParameter,requestId:requiredString('Exact request ID from the uncertain render.'),
   },async(args,exec)=>{
+    if(durable){const value=await durable.reconcile({operation:'any-render',targetId:args.productionId,requestId:args.requestId,exec});if(value.receipt?.state==='rejected')return {state:'rejected',requestId:args.requestId,reconciled:true,guidance:'This render was not accepted.'};return {production:productionValue(value),runId:value.run.id,requestId:args.requestId,phase:value.run.phase,guidance:'Observe this same run; do not submit another render.'};}
     const sessionId=sessionIdentity(exec),state=stateFor(sessionId),base=`/api/productions/${encodeURIComponent(args.productionId)}/render`;
     const matches=state.uncertain.filter(x=>[base,`${base}-prepared`].includes(x.path)&&x.requestId===args.requestId);
     if(state.active||matches.length!==1)throw new ControllerError('The exact uncertain render cannot be uniquely reconciled while other operations are active.');
@@ -821,7 +827,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   }, async (args, exec) => {
     const { productionId, ...body } = args;
     const result = await mutate(`/api/productions/${encodeURIComponent(productionId)}/feedback`, { ...body, requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'feedback') }, exec);
-    return { production: productionValue(result), feedback: result.feedback, created: result.created };
+    return { production: productionValue(result), feedback: result.feedback, ...(typeof result.created==='boolean'?{created:result.created}:{}) };
   });
   register('local_production_iteration', 'Record a reasoned next-step plan after review. This records a plan only; it does not change the model, submit a workflow or generate.', {
     productionId: productionParameter, expectedRevision: revisionParameter,
@@ -859,6 +865,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     const events=exec.agent.session.snapshotEvents?.();
     const turn=Array.isArray(events)?events.findLast(event=>event.type==='turn/start')?.data?.turn:null;
     if(!Number.isSafeInteger(turn)||turn<1)throw new ControllerError('The current conversation turn could not be verified. No search was proposed.');
+    (await import('./search-owner-status.mjs')).requireSearchOwnerStatus(identity.sessionId,turn);
     body.turn=turn;
     const result = await mutate('/api/search-proposals', body, exec, { validateResult: value => searchProposalValue(value, identity) });
     return searchResult(searchProposalValue(result, identity));
@@ -910,7 +917,8 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   ctx.on('tools/result', observeResult);
   // Own the complete scoped persona. Reusing the canonical prefix name also
   // shadows an ancestor persona instead of creating two complete sections.
-  ctx.systemPrompt.section({ name: 'deployment:persona-prefix', order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'), text: guideForRole(role, TOOL_GUIDE), interpolate: false, complete: true });
+  const durableGuide=durable?`\nDurable recovery: when a mutation is unresolved, never resend it. Use local_mutation_pending to recover this conversation's exact pending request identities, then use the matching read-only tool: local_asset_reconcile for image imports, local_search_reconcile for search proposals, local_production_action_reconcile for evaluation/iteration/feedback, local_pe_receipt_reconcile for a PE start/decision/recovery request, local_cancel_reconcile for stop acceptance, and the existing create/workflow/render reconcile tools for those operations. For a PE start use the production ID as target; for a PE decision or recovery use the PE run ID. A started or missing receipt stays unresolved. A verified rejected or administratively abandoned import/search is not a successful operation. A cancellation or PE recovery receipt proves acceptance only, not termination or resource release. Approval of a search proposal and any external transmission are separate; a prior claim can remain uncertain after a stop.`:'';
+  ctx.systemPrompt.section({ name: 'deployment:persona-prefix', order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'), text: guideForRole(role, TOOL_GUIDE+durableGuide), interpolate: false, complete: true });
   ctx.systemPrompt.suppressRuntimeContext();
   return {
     role, tools: definitions, guard, observeResult,
@@ -918,6 +926,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       if (closing) { await Promise.allSettled([...running]); return; }
       closing = true; lifetime.abort(new Error('local-genai scope disposed'));
       await Promise.allSettled([...running]);
+      durable?.close();
       releaseRoleRestriction();
       sessions.clear(); delivered.clear(); evaluationStates.clear();
     },

@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
+import {mkdtemp,mkdir,rm,realpath} from 'node:fs/promises';
+import {join,sep} from 'node:path';
+import {tmpdir} from 'node:os';
 import {createServer} from 'node:net';
-import {createPlugin} from '../apps/dsh-plugins/local-genai/index.mjs';
 import {RunStore} from '../apps/controller/store.mjs';
 import {ProductionStore} from '../apps/controller/productions.mjs';
 import {createControllerServer} from '../apps/controller/http.mjs';
@@ -10,126 +12,40 @@ import {MossPeCoordinator} from '../apps/controller/moss-pe-controller.mjs';
 import {buildMossOfficialGraph} from '../apps/controller/moss-official.mjs';
 import {buildQwen21Graph} from '../apps/controller/qwen21-workflow.mjs';
 import {workflowGraphHash} from '../apps/controller/workflows.mjs';
+import {openMutationJournal} from '../apps/dsh-plugins/local-genai/durable-journal.mjs';
+import {runDurableOwnedMutation,reconcileDurableOwnedMutation} from '../apps/dsh-plugins/local-genai/durable-coordinator.mjs';
 
-const json=value=>new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});
-async function fixture(fetch){
-  const definitions=new Map(),scope={};
-  const ctx={tools:{register:x=>definitions.set(x.name,x),presentAs(){},guard(){}},attachments:{},llm:{resolveModelInfo:async()=>({inputModalities:['image']})},agents:{get:()=>null},effect:f=>f(),systemPrompt:{section(){},getSectionOrder:()=>0,suppressRuntimeContext(){}},on:()=>()=>{}};
-  const plugin=await createPlugin(ctx,{role:'studio',runtimeRoot:process.cwd()},{scopeOf:()=>scope,scopeChainOf:()=>[scope],defineTool:x=>x,loadConfiguration:async()=>({controllerUrl:'http://127.0.0.1:3090',token:'synthetic-only'}),fetch});
-  let seq=0;const call=(name,args)=>definitions.get(name).execute(args,{callId:`call-${++seq}`,signal:new AbortController().signal,agent:{session:{id:'session',requestHeader:()=>({config:{provider:'local-strata',model:'strata-core'}})}}});
-  const create=(args={})=>call('local_production_create',{request:' A portrait ',criteria:[{id:'C1',description:' portrait '}],invariants:[],modelProfile:'moss-image-sft-int8-v1',...args});
-  return {call,create,dispose:()=>plugin.dispose()};
+async function durableFixture(t){
+ const base=await realpath(tmpdir()),root=await mkdtemp(join(base,'mutation-safety-journal-'));assert.ok(root.startsWith(base+sep));await mkdir(join(root,'data'));let journal=await openMutationJournal(root);t.after(async()=>{journal.close();assert.equal(await realpath(root),root);assert.ok(root.startsWith(base+sep));await rm(root,{recursive:true,force:true});});
+ const events=[],session={id:'session',surface:{nodes:[]},snapshotEvents:()=>events,deriveMessages:()=>[]},sessions={flush:async()=>true},persistence={flush:async()=>{},open:async(id,access)=>({id,access,read:async seq=>({events:events.filter(x=>x.seq===seq)}),close:async()=>{}})},common={journal,session,sessions,persistence,mapSessionId:id=>id,wireProof:async()=>true};let step=0;
+ const call=name=>{const callId=`call-${++step}`;events.push({seq:events.length,type:'tool/call',data:{callId,name,turn:1,step}});return callId;};
+ return {common,call,reopen:async()=>{journal.close();journal=await openMutationJournal(root);common.journal=journal;},pending:()=>journal.pending('session')};
 }
-
 test('lost production response is reconciled only by exact owned saved input without resubmission',async t=>{
   const store=new RunStore(':memory:'),productions=new ProductionStore(store);t.after(()=>store.db.close());
-  let original,mode='missing',postCount=0;
-  const f=await fixture(async(address,options)=>{
-    const url=new URL(address);
-    if(url.pathname==='/api/productions'&&options.method==='POST'){
-      postCount++;const body=JSON.parse(options.body);original=productions.create('session',body).production;throw Error('lost response after commit');
-    }
-    if(url.pathname==='/api/productions'&&options.method==='GET'){
-      assert.equal(url.searchParams.get('requestId'),original.requestId);
-      if(mode==='missing')return json({productions:[]});
-      if(mode==='mismatch')return json({productions:[{...original,sessionId:'other'}]});
-      return json({productions:[original]});
-    }
-    throw Error('unexpected request');
-  });t.after(f.dispose);
-  let id;await assert.rejects(f.create(),e=>(id=e.requestId,e.uncertain));
-  await assert.rejects(f.call('local_production_reconcile_create',{requestId:id}),/No unique/);
-  mode='mismatch';await assert.rejects(f.call('local_production_reconcile_create',{requestId:id}),/differs/);
-  await assert.rejects(f.create(),/previous mutation is unresolved/);
-  mode='match';const result=await f.call('local_production_reconcile_create',{requestId:id});
-  assert.equal(result.production.id,original.id);assert.equal(result.reconciled,true);assert.equal(postCount,1);
+  let original,mode='missing',postCount=0;const f=await durableFixture(t),id=randomUUID(),profile='moss-image-sft-int8-v1',input={requestId:id,modelProfile:profile,brief:{request:' A portrait ',criteria:[{id:'C1',description:' portrait '}],invariants:[]}},expected={request:'A portrait',criteria:[{id:'C1',description:'portrait'}],invariants:[],modelProfile:profile,mode:'t2i',inputAssetId:null,referenceAssetIds:[]},hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
+  const readProof=async()=>({productions:mode==='missing'?[]:[mode==='mismatch'?{...original,sessionId:'other'}:original]}),send=async()=>{postCount++;original=productions.create('session',input).production;throw Error('lost response after commit');};
+  const create=()=>runDurableOwnedMutation({...f.common,currentCallId:f.call('local_production_create'),toolName:'local_production_create',operation:'create',input,correlationHash:hash(expected),send,readProof});
+  const reconcile=()=>reconcileDurableOwnedMutation({...f.common,currentCallId:f.call('local_production_reconcile_create'),toolName:'local_production_reconcile_create',operation:'create',requestId:id,readProof});
+  await assert.rejects(create(),/lost response/);await f.reopen();await assert.rejects(reconcile(),/unresolved/);mode='mismatch';await assert.rejects(reconcile(),/unresolved/);await assert.rejects(create(),/unresolved|pending|open|UNIQUE/i);
+  mode='match';const result=await reconcile();assert.equal(result.value.productions[0].id,original.id);assert.equal(postCount,1);assert.equal(f.pending()[0].state,'receipt');
 });
 
 test('PE ownership and production binding must validate before uncertainty can clear',async t=>{
-  let id,mode='owner',postCount=0;
-  const brief={request:'portrait',invariants:[],modelProfile:'moss-image-sft-official-v1'},hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex'),briefHash=hash(brief);
-  const run=()=>{const spec={productionId:'prod',briefHash,prompt:'a',reason:'test',seed:'1',inputAssetId:null,modelProfile:brief.modelProfile};return {id:'run',requestId:id,kind:'moss-pe',sessionId:mode==='owner'?'other':'session',productionId:'prod',productionRevision:1,phase:'queued',spec,specHash:hash(spec)};};
-  const f=await fixture(async(address,options)=>{
-    const url=new URL(address);
-    if(url.pathname==='/api/moss-pe/status')return json({available:true});
-    if(url.pathname==='/api/moss-pe'&&options.method==='POST'){id=JSON.parse(options.body).requestId;throw Error('lost');}
-    if(url.pathname==='/api/moss-pe'&&options.method==='GET')return json({run:run()});
-    if(url.pathname==='/api/productions/prod')return json({production:{id:'prod',sessionId:'session',revision:1,briefHash,brief,promptEnhancements:mode==='binding'?[]:['run']}});
-    if(url.pathname==='/api/productions'&&options.method==='POST'){postCount++;return json({production:{id:'new',revision:0}});}
-    throw Error('unexpected');
-  });t.after(f.dispose);
-  await assert.rejects(f.call('local_moss_pe_start',{productionId:'prod',expectedRevision:0,prompt:'a',seed:'1',reason:'test'}),e=>e.uncertain);
-  await assert.rejects(f.call('local_moss_pe_result',{productionId:'prod',requestId:id}),/ownership/);
-  mode='binding';await assert.rejects(f.call('local_moss_pe_result',{productionId:'prod',requestId:id}),/binding/);
-  await assert.rejects(f.create(),/previous mutation is unresolved/);
-  mode='match';assert.equal((await f.call('local_moss_pe_result',{productionId:'prod',requestId:id})).runId,'run');
-  assert.equal((await f.create()).production.id,'new');assert.equal(postCount,1);
-});
-
-test('a parallel cancellation keeps normal mutations blocked until its own response',async t=>{
-  let first,cancel,createCount=0;
-  const f=await fixture(async(address)=>{
-    const path=new URL(address).pathname;
-    if(path==='/api/productions'&&++createCount===1)return new Promise(resolve=>{first=resolve;});
-    if(path.endsWith('/cancel'))return new Promise(resolve=>{cancel=resolve;});
-    if(path==='/api/productions')return json({production:{id:'next',revision:0}});
-    throw Error('unexpected');
-  });t.after(f.dispose);
-  const pending=f.create();await new Promise(r=>setImmediate(r));const stopping=f.call('local_production_cancel',{productionId:'prod'});await new Promise(r=>setImmediate(r));
-  first(json({production:{id:'prod',revision:0}}));await pending;
-  await assert.rejects(f.create(),/Another mutation/);assert.equal(createCount,1);
-  cancel(json({production:{id:'prod',revision:1}}));await stopping;
-  assert.equal((await f.create()).production.id,'next');
+  const store=new RunStore(':memory:'),productions=new ProductionStore(store),profile='moss-image-sft-official-v1';t.after(()=>store.close());const p=productions.create('session',{requestId:randomUUID(),modelProfile:profile,brief:{request:'portrait',criteria:[{id:'C1',description:'portrait'}],invariants:[]}}).production,pe=new MossPeCoordinator({store,productions,adapter:{},gate:{},verifyEpoch:async()=>({}),family:'moss'}),f=await durableFixture(t),id=randomUUID(),input={productionId:p.id,expectedRevision:0,prompt:'a',seed:'1',reason:'test',requestId:id};let postCount=0;
+  const submit=()=>runDurableOwnedMutation({...f.common,currentCallId:f.call('local_moss_pe_start'),toolName:'local_moss_pe_start',operation:'moss-pe-start',targetId:p.id,input,send:async()=>{postCount++;pe.create(p.id,'session',input);throw Error('lost');},readProof:async()=>{throw Error('unexpected');}});
+  await assert.rejects(submit(),/lost/);await f.reopen();const proof=pe.findStartReceipt(p.id,'session',id),reconcile=readProof=>reconcileDurableOwnedMutation({...f.common,currentCallId:f.call('local_pe_receipt_reconcile'),toolName:'local_pe_receipt_reconcile',operation:'moss-pe-start',targetId:p.id,requestId:id,readProof});
+  const wrongOwner=structuredClone(proof);wrongOwner.run.sessionId='other';await assert.rejects(reconcile(async()=>wrongOwner),/unresolved/);const wrongBinding=structuredClone(proof);wrongBinding.production.promptEnhancements=[];await assert.rejects(reconcile(async()=>wrongBinding),/unresolved/);await assert.rejects(submit(),/unresolved|pending|open|UNIQUE/i);
+  const result=await reconcile(async()=>proof);assert.equal(result.value.run.id,proof.run.id);assert.equal(postCount,1);assert.equal(f.pending()[0].state,'receipt');
 });
 
 test('real Controller brief normalization for edit, ordered inputs and structured fields is verified',async t=>{
   const ids=['00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003'];
   const store=new RunStore(':memory:'),productions=new ProductionStore(store,{assets:{get:id=>({purpose:id===ids[2]?'reference':'input'})}});t.after(()=>store.db.close());
-  let original,changed=false;
-  const f=await fixture(async(address,options)=>{
-    const url=new URL(address);
-    if(url.pathname==='/api/productions'&&options.method==='POST'){original=productions.create('session',JSON.parse(options.body)).production;throw Error('lost');}
-    if(url.pathname==='/api/productions'&&options.method==='GET')return json({productions:[changed?{...original,brief:{...original.brief,inputAssetIds:[...original.brief.inputAssetIds].reverse()}}:original]});
-    throw Error('unexpected');
-  });t.after(f.dispose);
-  let id;await assert.rejects(f.create({modelProfile:'moss-image-sft-official-v1',mode:'edit',inputAssetId:ids[0],inputAssetIds:ids.slice(0,2),referenceAssetIds:[ids[2]],requiredConditions:[' keep '],preferredConditions:[],avoid:[' watermark '],steps:[' edit '],usage:' test '}),e=>(id=e.requestId,e.uncertain));
-  changed=true;await assert.rejects(f.call('local_production_reconcile_create',{requestId:id}),/differs/);
-  changed=false;assert.equal((await f.call('local_production_reconcile_create',{requestId:id})).production.id,original.id);
-});
-
-test('reconcile cannot clear the create while a cancellation begins during the read',async t=>{
-  const store=new RunStore(':memory:'),productions=new ProductionStore(store);t.after(()=>store.db.close());
-  let original,completeRead,completeCancel;
-  const f=await fixture(async(address,options)=>{
-    const path=new URL(address).pathname;
-    if(path==='/api/productions'&&options.method==='POST'){original=productions.create('session',JSON.parse(options.body)).production;throw Error('lost');}
-    if(path==='/api/productions'&&options.method==='GET')return new Promise(resolve=>{completeRead=resolve;});
-    if(path.endsWith('/cancel'))return new Promise(resolve=>{completeCancel=resolve;});
-    throw Error('unexpected');
-  });t.after(f.dispose);
-  let id;await assert.rejects(f.create(),e=>(id=e.requestId,e.uncertain));
-  const read=f.call('local_production_reconcile_create',{requestId:id});await new Promise(r=>setImmediate(r));
-  const cancel=f.call('local_production_cancel',{productionId:original.id});await new Promise(r=>setImmediate(r));
-  completeRead(json({productions:[original]}));await assert.rejects(read,/state changed/);
-  await assert.rejects(f.create(),/previous mutation is unresolved/);
-  completeCancel(json({production:{id:original.id,revision:1}}));await cancel;
-  const reread=f.call('local_production_reconcile_create',{requestId:id});await new Promise(r=>setImmediate(r));completeRead(json({productions:[original]}));
-  assert.equal((await reread).reconciled,true);
-});
-
-test('independent uncertain cancellation is not erased by a successful create reconciliation',async t=>{
-  const store=new RunStore(':memory:'),productions=new ProductionStore(store);t.after(()=>store.db.close());let original;
-  const f=await fixture(async(address,options)=>{
-    const path=new URL(address).pathname;
-    if(path==='/api/productions'&&options.method==='POST'){original=productions.create('session',JSON.parse(options.body)).production;throw Error('lost create');}
-    if(path.endsWith('/cancel'))throw Error('lost cancellation');
-    if(path==='/api/productions'&&options.method==='GET')return json({productions:[original]});
-    throw Error('unexpected');
-  });t.after(f.dispose);
-  let id;await assert.rejects(f.create(),e=>(id=e.requestId,e.uncertain));
-  await assert.rejects(f.call('local_production_cancel',{productionId:original.id}),e=>e.uncertain);
-  const result=await f.call('local_production_reconcile_create',{requestId:id});assert.equal(result.otherUnresolved,1);
-  await assert.rejects(f.create(),/previous mutation is unresolved/);
+  const f=await durableFixture(t),id=randomUUID(),profile='moss-image-sft-official-v1',brief={request:' A portrait ',criteria:[{id:'C1',description:' portrait '}],invariants:[],mode:'edit',inputAssetId:ids[0],inputAssetIds:ids.slice(0,2),referenceAssetIds:[ids[2]],requiredConditions:[' keep '],preferredConditions:[],avoid:[' watermark '],steps:[' edit '],usage:' test '},input={requestId:id,modelProfile:profile,brief},expected={request:'A portrait',criteria:[{id:'C1',description:'portrait'}],invariants:[],modelProfile:profile,mode:'edit',inputAssetId:ids[0],referenceAssetIds:[ids[2]],inputAssetIds:ids.slice(0,2),requiredConditions:['keep'],preferredConditions:[],avoid:['watermark'],steps:['edit'],usage:'test'},correlationHash=createHash('sha256').update(JSON.stringify(expected)).digest('hex');let original;
+  await assert.rejects(runDurableOwnedMutation({...f.common,currentCallId:f.call('local_production_create'),toolName:'local_production_create',operation:'create',input,correlationHash,send:async()=>{original=productions.create('session',input).production;throw Error('lost');},readProof:async()=>{throw Error('unexpected');}}),/lost/);await f.reopen();assert.deepEqual(original.brief,expected);
+  const reconcile=readProof=>reconcileDurableOwnedMutation({...f.common,currentCallId:f.call('local_production_reconcile_create'),toolName:'local_production_reconcile_create',operation:'create',requestId:id,readProof}),changed=structuredClone(original);changed.brief.inputAssetIds.reverse();changed.briefHash=createHash('sha256').update(JSON.stringify(changed.brief)).digest('hex');
+  await assert.rejects(reconcile(async()=>({productions:[changed]})),/unresolved/);const value=await reconcile(async()=>({productions:[original]}));assert.equal(value.value.productions[0].id,original.id);assert.equal(f.pending()[0].state,'receipt');
 });
 
 test('real Controller HTTP and SQLite recover an acknowledged-on-server create without a second POST',async t=>{
@@ -139,37 +55,26 @@ test('real Controller HTTP and SQLite recover an acknowledged-on-server create w
   const controller=createControllerServer({store,productions,workflows,engine:{work:new Set(),launch(){}},token:'admin',dshToken:'synthetic-only',port,profile:'moss-image-sft-int8-v1'});
   await new Promise((resolve,reject)=>controller.once('error',reject).listen(port,'127.0.0.1',resolve));
   t.after(async()=>{controller.closeAllConnections();await new Promise(resolve=>controller.close(resolve));store.close();});
-  let post=0,get=0;
-  const f=await fixture(async(address,options)=>{
-    const source=new URL(address);assert.equal(source.origin,'http://127.0.0.1:3090');
-    const response=await fetch(`http://127.0.0.1:${port}${source.pathname}${source.search}`,options);
-    if(options.method==='POST'){post++;assert.equal(response.status,201);await response.arrayBuffer();throw Error('response lost after server commit');}
-    get++;return response;
-  });t.after(f.dispose);
-  let id;await assert.rejects(f.create(),e=>(id=e.requestId,e.uncertain));
-  const recovered=await f.call('local_production_reconcile_create',{requestId:id});
-  assert.equal(recovered.reconciled,true);assert.equal(post,1);assert.equal(get,1);
-  assert.equal(productions.list('session',id)[0].id,recovered.production.id);
+  let post=0,get=0;const f=await durableFixture(t),id=randomUUID(),profile='moss-image-sft-int8-v1',input={requestId:id,modelProfile:profile,brief:{request:' A portrait ',criteria:[{id:'C1',description:' portrait '}],invariants:[]}},expected={request:'A portrait',criteria:[{id:'C1',description:'portrait'}],invariants:[],modelProfile:profile,mode:'t2i',inputAssetId:null,referenceAssetIds:[]},correlationHash=createHash('sha256').update(JSON.stringify(expected)).digest('hex'),headers={Authorization:'Bearer synthetic-only','X-DSH-Session':'session','Content-Type':'application/json'};
+  const readProof=async()=>{get++;const response=await fetch(`http://127.0.0.1:${port}/api/productions?${new URLSearchParams({requestId:id})}`,{headers});assert.equal(response.status,200);return response.json();};
+  await assert.rejects(runDurableOwnedMutation({...f.common,currentCallId:f.call('local_production_create'),toolName:'local_production_create',operation:'create',input,correlationHash,send:async()=>{post++;const response=await fetch(`http://127.0.0.1:${port}/api/productions`,{method:'POST',headers,body:JSON.stringify(input)});assert.equal(response.status,201);await response.arrayBuffer();throw Error('response lost after server commit');},readProof}),/response lost/);await f.reopen();
+  const recovered=await reconcileDurableOwnedMutation({...f.common,currentCallId:f.call('local_production_reconcile_create'),toolName:'local_production_reconcile_create',operation:'create',requestId:id,readProof});assert.equal(post,1);assert.equal(get,1);assert.equal(productions.list('session',id)[0].id,recovered.value.productions[0].id);assert.equal(f.pending()[0].state,'receipt');
 });
 
 for(const family of ['moss','qwen'])test(`${family} PE reconciliation accepts a real Coordinator run with its exact original whitespace and defaults`,async t=>{
   const profile=family==='moss'?'moss-image-sft-official-v1':'qwen-image-2.1-base-v1';
   const store=new RunStore(':memory:'),productions=new ProductionStore(store),adapter={},gate={};t.after(()=>store.close());
-  const p=productions.create('session',{requestId:'production-fixture-1234567',modelProfile:profile,brief:{request:'portrait',criteria:[{id:'C1',description:'portrait'}],invariants:[]}}).production;
+  const p=productions.create('session',{requestId:randomUUID(),modelProfile:profile,brief:{request:'portrait',criteria:[{id:'C1',description:'portrait'}],invariants:[]}}).production;
   const pe=new MossPeCoordinator({store,productions,adapter,gate,verifyEpoch:async()=>({}),family,...(family==='qwen'?{licenseCheck:async()=>true}:{})});
-  let requestId,posts=0;
-  const f=await fixture(async(address,options)=>{
-    const url=new URL(address),base=`/api/${family}-pe`;
-    if(url.pathname===`${base}/status`)return json({available:true});
-    if(url.pathname===base&&options.method==='POST'){posts++;const body=JSON.parse(options.body);requestId=body.requestId;pe.create(p.id,'session',body);throw Error('response lost after PE creation');}
-    if(url.pathname===base&&options.method==='GET')return json({run:pe.find(p.id,'session',url.searchParams.get('requestId'))});
-    if(url.pathname===`/api/productions/${p.id}`)return json({production:productions.get(p.id,'session')});
-    throw Error('unexpected request');
-  });t.after(f.dispose);
-  const args={productionId:p.id,expectedRevision:0,prompt:' preserve spaces ',seed:'1',reason:' test reason ',...(family==='qwen'?{mode:'t2i'}:{})};
-  await assert.rejects(f.call(`local_${family}_pe_start`,args),e=>e.uncertain);
-  const recovered=await f.call(`local_${family}_pe_result`,{productionId:p.id,requestId});
-  assert.equal(recovered.runId,pe.find(p.id,'session',requestId).id);assert.equal(posts,1);
+  const base=await realpath(tmpdir()),root=await mkdtemp(join(base,'pe-start-journal-'));assert.ok(root.startsWith(base+sep));await mkdir(join(root,'data'));let journal=await openMutationJournal(root),posts=0;t.after(async()=>{journal.close();assert.equal(await realpath(root),root);assert.ok(root.startsWith(base+sep));await rm(root,{recursive:true,force:true});});
+  const events=[],session={id:'session',surface:{nodes:[]},snapshotEvents:()=>events,deriveMessages:()=>[]},sessions={flush:async()=>true},persistence={flush:async()=>{},open:async(id,access)=>({id,access,read:async seq=>({events:events.filter(x=>x.seq===seq)}),close:async()=>{}})},common={journal,session,sessions,persistence,mapSessionId:id=>id,wireProof:async()=>true};let step=0;
+  const call=name=>{const callId=`call-${++step}`;events.push({seq:events.length,type:'tool/call',data:{callId,name,turn:1,step}});return callId;},requestId=randomUUID(),input={productionId:p.id,expectedRevision:0,prompt:' preserve spaces ',seed:'1',reason:' test reason ',...(family==='qwen'?{mode:'t2i'}:{}),requestId},operation=`${family}-pe-start`;
+  await assert.rejects(runDurableOwnedMutation({...common,currentCallId:call(`local_${family}_pe_start`),toolName:`local_${family}_pe_start`,operation,targetId:p.id,input,send:async()=>{posts++;pe.create(p.id,'session',input);throw Error('response lost after PE creation');},readProof:async()=>{throw Error('unexpected');}}),/response lost/);
+  journal.close();journal=await openMutationJournal(root);common.journal=journal;
+  const proof=pe.findStartReceipt(p.id,'session',requestId);const wrong=structuredClone(proof);wrong.run.sessionId='other';
+  const reconcile=readProof=>reconcileDurableOwnedMutation({...common,currentCallId:call('local_pe_receipt_reconcile'),toolName:'local_pe_receipt_reconcile',operation,targetId:p.id,requestId,readProof});
+  await assert.rejects(reconcile(async()=>wrong),/unresolved/);const recovered=await reconcile(async()=>proof);
+  assert.equal(recovered.value.run.id,pe.find(p.id,'session',requestId).id);assert.equal(posts,1);assert.equal(journal.pending('session')[0].state,'receipt');
 });
 
 for(const family of ['moss','qwen'])test(`${family} prepared render response loss reconciles the owned SQLite run via actual Controller HTTP without resubmitting`,async t=>{
@@ -189,21 +94,19 @@ for(const family of ['moss','qwen'])test(`${family} prepared render response los
   const controller=createControllerServer({store,productions,workflows,engine:{work:new Set(),launch(){launches++;}},token:'admin',dshToken:'synthetic-only',port,profile});
   await new Promise((resolve,reject)=>controller.once('error',reject).listen(port,'127.0.0.1',resolve));
   t.after(async()=>{controller.closeAllConnections();await new Promise(resolve=>controller.close(resolve));store.close();});
-  const f=await fixture(async(address,options)=>{
-    const source=new URL(address);assert.equal(source.origin,'http://127.0.0.1:3090');
-    const response=await fetch(`http://127.0.0.1:${port}${source.pathname}${source.search}`,options);
-    if(options.method==='POST'){post++;assert.equal(response.status,202);await response.arrayBuffer();throw Error('lost render response after admission');}
-    get++;
-    if(alter){const value=await response.json();alter(value);return json(value);}
-    return response;
-  });t.after(f.dispose);
-  let id;await assert.rejects(f.call('local_prepared_render',{productionId:p.id,expectedRevision:1,workflowId:workflow.id}),e=>(id=e.requestId,e.uncertain));
+  const base=await realpath(tmpdir()),root=await mkdtemp(join(base,'prepared-render-journal-'));assert.ok(root.startsWith(base+sep));await mkdir(join(root,'data'));let journal=await openMutationJournal(root);t.after(async()=>{journal.close();assert.equal(await realpath(root),root);assert.ok(root.startsWith(base+sep));await rm(root,{recursive:true,force:true});});
+  const events=[],session={id:'session',surface:{nodes:[]},snapshotEvents:()=>events,deriveMessages:()=>[]},sessions={flush:async()=>true},persistence={flush:async()=>{},open:async(id,access)=>({id,access,read:async seq=>({events:events.filter(x=>x.seq===seq)}),close:async()=>{}})},common={journal,session,sessions,persistence,mapSessionId:id=>id,wireProof:async()=>true};let step=0;
+  const call=name=>{const callId=`call-${++step}`;events.push({seq:events.length,type:'tool/call',data:{callId,name,turn:1,step}});return callId;},id=randomUUID(),input={workflowId:workflow.id,expectedRevision:1,requestId:id},headers={Authorization:'Bearer synthetic-only','X-DSH-Session':'session','Content-Type':'application/json'};
+  const readProof=async()=>{get++;const response=await fetch(`http://127.0.0.1:${port}/api/productions/${p.id}/run-by-request?${new URLSearchParams({requestId:id})}`,{headers});if(!response.ok)throw Error(`HTTP ${response.status}`);const value=await response.json();if(alter)alter(value);return value;};
+  const reconcile=()=>reconcileDurableOwnedMutation({...common,currentCallId:call('local_render_reconcile'),toolName:'local_render_reconcile',operation:'prepared-render',targetId:p.id,requestId:id,readProof});
+  const submit=()=>runDurableOwnedMutation({...common,currentCallId:call('local_prepared_render'),toolName:'local_prepared_render',operation:'prepared-render',targetId:p.id,input,send:async()=>{post++;const response=await fetch(`http://127.0.0.1:${port}/api/productions/${p.id}/render-prepared`,{method:'POST',headers,body:JSON.stringify(input)});assert.equal(response.status,202);await response.arrayBuffer();throw Error('lost render response after admission');},readProof});
+  await assert.rejects(submit(),/lost render response/);journal.close();journal=await openMutationJournal(root);common.journal=journal;
   const wrong=await fetch(`http://127.0.0.1:${port}/api/productions/${p.id}/run-by-request?${new URLSearchParams({requestId:id})}`,{headers:{Authorization:'Bearer synthetic-only','X-DSH-Session':'different-session'}});assert.equal(wrong.status,404);
   const missing=await fetch(`http://127.0.0.1:${port}/api/productions/${p.id}/run-by-request?requestId=nonexistent-request-id`,{headers:{Authorization:'Bearer synthetic-only','X-DSH-Session':'session'}});assert.equal(missing.status,404);
   const duplicate=await fetch(`http://127.0.0.1:${port}/api/productions/${p.id}/run-by-request?requestId=${id}&requestId=${id}`,{headers:{Authorization:'Bearer synthetic-only','X-DSH-Session':'session'}});assert.equal(duplicate.status,400);
   for(const mode of ['missing','changed']){
-    savedMode=mode;await assert.rejects(f.call('local_render_reconcile',{productionId:p.id,requestId:id}),/HTTP 409/);
-    await assert.rejects(f.create(),/previous mutation is unresolved/);
+    savedMode=mode;await assert.rejects(reconcile(),/HTTP 409/);
+    await assert.rejects(submit(),/unresolved|pending|open|UNIQUE/i);
   }
   savedMode='valid';
   const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
@@ -215,11 +118,11 @@ for(const family of ['moss','qwen'])test(`${family} prepared render response los
     x=>{x.run.productionRevision++;},
     x=>{x.production.brief.request='different';},
   ]){
-    alter=mutate;await assert.rejects(f.call('local_render_reconcile',{productionId:p.id,requestId:id}),/evidence differs/);
-    await assert.rejects(f.create(),/previous mutation is unresolved/);
+    alter=mutate;await assert.rejects(reconcile(),/unresolved/);
+    await assert.rejects(submit(),/unresolved|pending|open|UNIQUE/i);
   }
   alter=null;
-  const recovered=await f.call('local_render_reconcile',{productionId:p.id,requestId:id});
-  assert.equal(recovered.phase,'queued');assert.equal(post,1);assert.equal(get,9);assert.equal(launches,1);
-  assert.equal(store.get(recovered.runId).requestId,id);
+  const recovered=await reconcile();
+  assert.equal(recovered.value.run.phase,'queued');assert.equal(post,1);assert.equal(get,9);assert.equal(launches,1);
+  assert.equal(store.get(recovered.value.run.id).requestId,id);assert.equal(journal.pending('session')[0].state,'receipt');
 });

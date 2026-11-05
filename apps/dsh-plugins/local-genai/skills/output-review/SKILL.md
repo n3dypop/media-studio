@@ -13,3 +13,5 @@ executionEvidence distinguishes submitted request, SHA-verified output bytes/dim
 For MP4 inspect all three actually delivered sampled frames and retain exact frame/video hashes. Frames cannot establish the full clip, motion, flicker, camera or audio; mark unseen criteria unverified and use needs_user. Do not claim automatic acceptance proves user satisfaction. The best candidate may differ from the latest; select only on evidence and preserve prior outputs.
 
 Present the actual image, visible compliance and meaningful unverified points concisely, asking only for the user's selection or desired changes. Do not list internal production/run/criterion IDs, hashes or old RAM/VRAM unless requested or needed to explain a specific failure; evidence remains saved. A fictional prompt or user approval is not proof of identity or non-similarity; do not ask the user to certify those facts.
+
+If evaluation recording is uncertain and local_production_action_reconcile is available, read the same production/request with operation=evaluate; do not submit the evaluation again. A rejected record is not an evaluation, and absent or started evidence stays unresolved.

@@ -60,8 +60,9 @@ test('managed Controller starts and stops with a Node executable outside the pri
     const token=(await readFile(join(fixture,'data/controller/dsh-token'),'utf8')).trim();
     const headers={Authorization:`Bearer ${token}`,'X-DSH-Session':'fixture-session','Content-Type':'application/json'};
     let response=await fetch(`http://127.0.0.1:${port}/api/status`,{headers});assert.equal(response.status,200);assert.equal((await response.json()).search.enabled,false);
-    response=await fetch(`http://127.0.0.1:${port}/api/search-proposals/user-turn`,{method:'POST',headers,body:JSON.stringify({turn:1})});assert.equal(response.status,200);
-    response=await fetch(`http://127.0.0.1:${port}/api/search-proposals`,{method:'POST',headers,body:JSON.stringify({queries:['fixture'],purpose:'test',turn:1})});assert.equal(response.status,503);
+    response=await fetch(`http://127.0.0.1:${port}/api/search-proposals/user-turn`,{method:'POST',headers,body:JSON.stringify({turn:1})});assert.equal(response.status,503,'A missing identity probe must not enable unprotected search');
+    response=await fetch(`http://127.0.0.1:${port}/api/search-proposals`,{method:'POST',headers,body:JSON.stringify({queries:['fixture'],purpose:'test',turn:1})});assert.equal(response.status,409,'The rejected turn cannot submit a search');
+    response=await fetch(`http://127.0.0.1:${port}/api/search-proposals`,{headers});assert.equal(response.status,200);const listing=await response.json();assert.equal(listing.enabled,false);assert.deepEqual(listing.proposals,[]);
     await exec('pwsh.exe',['-NoProfile','-NonInteractive','-File',join(source,'Stop-Controller.ps1')],{env,windowsHide:true,timeout:30000});stopped=true;
   } finally {
     if(attempted&&!stopped&&await access(join(fixture,'runtime/Controller.json')).then(()=>true,()=>false)){

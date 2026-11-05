@@ -1,12 +1,27 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, lstatSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { assertCoreTable } from './schema-integrity.mjs';
 import {MODEL_PROFILES} from './workflows.mjs';
 import {mediaIntent,assertModeProfile,assertActiveProfile,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS} from './media-modes.mjs';
 
 export const terminalPhases = new Set(['completed', 'failed', 'cancelled']);
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const baseTables=[
+  {name:'meta',create:'CREATE TABLE meta (key TEXT PRIMARY KEY,value TEXT NOT NULL)',columns:[['key','TEXT',0,1],['value','TEXT',1,0]],primary:['key']},
+  {name:'runs',create:'CREATE TABLE runs (id TEXT PRIMARY KEY,request_id TEXT UNIQUE NOT NULL,payload_hash TEXT NOT NULL,phase TEXT NOT NULL,json TEXT NOT NULL)',columns:[['id','TEXT',0,1],['request_id','TEXT',1,0],['payload_hash','TEXT',1,0],['phase','TEXT',1,0],['json','TEXT',1,0]],primary:['id'],unique:[['request_id']]},
+  {name:'events',create:'CREATE TABLE events (seq INTEGER PRIMARY KEY AUTOINCREMENT,run_id TEXT NOT NULL,at TEXT NOT NULL,type TEXT NOT NULL,json TEXT NOT NULL)',columns:[['seq','INTEGER',0,1],['run_id','TEXT',1,0],['at','TEXT',1,0],['type','TEXT',1,0],['json','TEXT',1,0]],primary:['seq']},
+];
+const provisionKey='controllerCoreProvision:v1';
+const provisionText=id=>`media-studio-controller-v1:${id}\n`;
+function inspectProvision(path){
+  if(!existsSync(path))return null;
+  const stat=lstatSync(path);if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink>1)throw Error('Controller provisioning marker is unsafe');
+  const id=readFileSync(path,'utf8').match(/^media-studio-controller-v1:([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})\n$/)?.[1];
+  if(!id)throw Error('Controller provisioning marker is invalid');return id;
+}
+function createProvision(path,id){const fd=openSync(path,'wx');try{writeFileSync(fd,provisionText(id),'utf8');fsyncSync(fd);}finally{closeSync(fd);}}
 export class ApiError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
@@ -38,14 +53,36 @@ export function normalizeRequest(input) {
 export class RunStore {
   constructor(path) {
     mkdirSync(dirname(path), { recursive: true });
+    const memory=path===':memory:',existed=!memory&&existsSync(path),marker=memory?null:path+'.provision';
+    let generation=memory?null:inspectProvision(marker);const markerExisted=generation!==null;
+    if(!memory&&generation&&!existed)throw Error('Previously provisioned Controller database is missing; do not recreate it');
+    if(!memory&&!generation&&!existed){generation=randomUUID();createProvision(marker,generation);}
     this.db = new DatabaseSync(path);
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
-      CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY,value TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY,request_id TEXT UNIQUE NOT NULL,payload_hash TEXT NOT NULL,phase TEXT NOT NULL,json TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT,run_id TEXT NOT NULL,at TEXT NOT NULL,type TEXT NOT NULL,json TEXT NOT NULL);`);
-    const row = this.db.prepare('SELECT value FROM meta WHERE key=?').get('controllerId');
-    this.controllerId = row?.value ?? randomUUID();
-    if (!row) this.db.prepare('INSERT INTO meta VALUES (?,?)').run('controllerId', this.controllerId);
+    try{
+      this.db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE;');
+      const objects=this.db.prepare("SELECT name,type FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").all();
+      if(!objects.length){
+        if(existed)throw Error('Existing Controller database is empty; initialization requires maintenance');
+        for(const spec of baseTables)this.db.exec(spec.create);
+        this.controllerId=randomUUID();this.db.prepare('INSERT INTO meta VALUES (?,?)').run('controllerId',this.controllerId);
+        if(!memory)this.db.prepare('INSERT INTO meta VALUES (?,?)').run(provisionKey,generation);
+      }else{
+        for(const spec of baseTables){const object=objects.find(x=>x.name===spec.name);if(object?.type!=='table')throw Error(`Controller core table is missing: ${spec.name}`);assertCoreTable(this.db,spec);}
+        const row=this.db.prepare('SELECT value FROM meta WHERE key=?').get('controllerId');
+        if(!row||typeof row.value!=='string'||!row.value)throw Error('Controller identity is missing');
+        this.controllerId=row.value;
+        if(!memory){
+          const saved=this.db.prepare('SELECT value FROM meta WHERE key=?').get(provisionKey);
+          if(generation){if(!saved||saved.value!==generation)throw Error('Controller database generation differs from its provisioning marker');}
+          else {if(saved)throw Error('Controller provisioning marker is missing; preserve the database for maintenance');generation=randomUUID();this.db.prepare('INSERT INTO meta VALUES (?,?)').run(provisionKey,generation);}
+        }
+      }
+      this.db.exec('COMMIT;');
+      if(!memory){
+        if(existed&&!markerExisted)createProvision(marker,generation);
+        else if(inspectProvision(marker)!==generation)throw Error('Controller provisioning marker changed during initialization');
+      }
+    }catch(error){try{this.db.exec('ROLLBACK;');}catch{}this.db.close();throw error;}
   }
   transaction(fn) {
     this.db.exec('BEGIN IMMEDIATE');
@@ -55,8 +92,9 @@ export class RunStore {
   get(id) { const row = this.db.prepare('SELECT json FROM runs WHERE id=?').get(id); return row ? JSON.parse(row.json) : null; }
   list() { return this.db.prepare('SELECT json FROM runs ORDER BY rowid DESC LIMIT 100').all().map(row => JSON.parse(row.json)); }
   active() { const row = this.db.prepare("SELECT json FROM runs WHERE phase NOT IN ('completed','failed','cancelled') ORDER BY rowid LIMIT 1").get(); return row ? JSON.parse(row.json) : null; }
-  create(request, { decorate } = {}) {
+  create(request, { decorate, beforeCreate } = {}) {
     return this.transaction(() => {
+      if(beforeCreate)beforeCreate();
       const existing = this.db.prepare('SELECT json,payload_hash FROM runs WHERE request_id=?').get(request.requestId);
       const payloadHash = digest(request.spec);
       if (existing) {
