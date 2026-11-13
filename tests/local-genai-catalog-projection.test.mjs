@@ -14,7 +14,7 @@ test('studio catalog keeps template selection usable without returning a graph o
     nodeSchemas: { UNETLoader: {} }, coreModelLedger: { engine: 'Strata' },
   };
 
-  const compact = workflowCatalogForAgent(catalog, { role: 'studio' });
+  const compact = workflowCatalogForAgent(catalog, 'studio');
   assert.deepEqual(compact.modelProfiles, [{ id: modelProfile, label: 'MOSS Image', available: true }]);
   assert.deepEqual(JSON.parse(JSON.stringify(compact)), compact, 'DSH tool output must be lossless JSON');
   assert.deepEqual(compact.capabilities, [catalog.capabilities[0]]);
@@ -22,6 +22,5 @@ test('studio catalog keeps template selection usable without returning a graph o
   assert.deepEqual(compact.limits, { maxPixels: 1500000, maxSteps: 40 });
   assert.equal(Object.hasOwn(compact, 'nodeSchemas'), false);
   assert.equal(Object.hasOwn(compact, 'coreModelLedger'), false);
-  assert.equal(workflowCatalogForAgent(catalog, { role: 'studio', details: true }), catalog);
-  assert.equal(workflowCatalogForAgent(catalog, { role: 'workflow-development' }), catalog);
+  assert.equal(workflowCatalogForAgent(catalog, 'workflow-development'), catalog);
 });

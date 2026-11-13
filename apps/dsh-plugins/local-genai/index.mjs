@@ -156,8 +156,8 @@ function workflowMetadata(workflow) {
     .filter(key => workflow[key] !== undefined).map(key => [key, workflow[key]]));
 }
 
-export function workflowCatalogForAgent(catalog, { role, details = false } = {}) {
-  if (role !== 'studio' || details) return catalog;
+export function workflowCatalogForAgent(catalog, role) {
+  if (role !== 'studio') return catalog;
   const { modelProfiles, models, templates, capabilities, limits, ...fields } = catalog;
   const mode = fields.mode;
   const productionLimits = limits && Object.fromEntries([
@@ -298,7 +298,8 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   const defineTool = dependencies.defineTool ?? bindings.defineTool;
   if (getScope(ctx) === undefined) throw new Error('local-genai must be mounted inside a dedicated agent preset, never at Host root.');
   const scopeChainOf = dependencies.scopeChainOf ?? (await (dependencies.loadDshScopeBindings??loadDshScopeBindings)(bindingOptions())).scopeChainOf;
-  const allowedTools = new Set([...NATIVE_TOOLS.filter(name => role !== 'image-generation' || name !== 'local_workflow_draft'), ...(['image-generation', 'studio'].includes(role) ? ['local_image_prepare'] : []), ...(role === 'studio' ? ['local_moss_official_prepare','local_qwen21_prepare','local_prepared_render','local_moss_pe_start','local_moss_pe_result','local_moss_pe_decide','local_moss_pe_reconcile','local_qwen_pe_start','local_qwen_pe_result','local_qwen_pe_decide','local_qwen_pe_reconcile', 'local_input_images', 'local_asset_import', 'local_asset_view', 'local_production_iteration', 'local_production_history', 'local_production_feedback', 'local_resource_status', 'skill'] : []), 'ask_user_question']);
+  const templateOnly = role === 'studio' || role === 'image-generation';
+  const allowedTools = new Set([...NATIVE_TOOLS.filter(name => !templateOnly || name !== 'local_workflow_draft'), ...(templateOnly ? ['local_image_prepare'] : []), ...(role === 'studio' ? ['local_moss_official_prepare','local_qwen21_prepare','local_prepared_render','local_moss_pe_start','local_moss_pe_result','local_moss_pe_decide','local_moss_pe_reconcile','local_qwen_pe_start','local_qwen_pe_result','local_qwen_pe_decide','local_qwen_pe_reconcile', 'local_input_images', 'local_asset_import', 'local_asset_view', 'local_production_iteration', 'local_production_history', 'local_production_feedback', 'local_resource_status', 'skill'] : []), 'ask_user_question']);
   for(const name of ['local_asset_reconcile','local_production_action_reconcile','local_search_reconcile','local_pe_receipt_reconcile','local_cancel_reconcile','local_mutation_pending'])allowedTools.add(name);
   const settings = await (dependencies.loadConfiguration ?? loadConfiguration)(config);
   const fetchImpl = dependencies.fetch ?? globalThis.fetch;
@@ -569,15 +570,14 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     register('local_search_reconcile','Read a previously saved, rejected or administratively abandoned search proposal by its exact request ID. No search or page access is performed.',{requestId:requiredString('The original search proposal request ID.')},async(args,exec)=>{const value=await durable.reconcile({operation:'search-proposal',requestId:args.requestId,exec});return ['abandoned','rejected'].includes(value.receipt.state)?{state:value.receipt.state,requestId:args.requestId,reconciled:true}:searchResult(searchProposalValue(value,{sessionId:sessionIdentity(exec)}));});
     register('local_pe_receipt_reconcile','Read a previously accepted or rejected prompt-enhancer request by its exact request ID. This does not repeat execution or establish GPU cleanup.',{requestId:requiredString('The original PE request ID.'),targetId:requiredString('Production ID for a start; PE run ID for decision or reconcile.'),operation:{type:'string',required:true,enum:['moss-pe-start','moss-pe-decision','moss-pe-reconcile','qwen-pe-start','qwen-pe-decision','qwen-pe-reconcile']}},async(args,exec)=>{const value=await durable.reconcile({operation:args.operation,targetId:args.targetId,requestId:args.requestId,exec});if(value.receipt?.state==='rejected')return {state:'rejected',requestId:args.requestId,reconciled:true};return {production:productionValue(value),runId:value.run.id,phase:value.run.phase,receipt:value.receipt,guidance:'Acceptance does not prove completion or GPU cleanup.'};});
   }
-  register('local_workflow_catalog', role === 'studio' ? 'Read installed models, capabilities and template limits. Pass mode and any owned generator input. Request details only for graph development or provenance. This does not generate.' : 'Read actual model availability, templates and limits without generating.', {
+  register('local_workflow_catalog', role === 'studio' ? 'Read installed models, capabilities and approved template limits. Pass mode and any owned generator input. This does not generate.' : 'Read actual model availability, templates and limits without generating.', {
     modelProfile: modelProfileParameter, mode: modeParameter, inputAssetId: { type: 'string' },
-    ...(role === 'studio' ? { details: { type: 'boolean', description: 'Include full graphs, node schemas and provenance only when needed for permitted graph development or a provenance question.' } } : {}),
   }, async (args, exec) => {
     const query = new URLSearchParams(Object.fromEntries(['modelProfile', 'mode', 'inputAssetId'].filter(key => args[key] !== undefined).map(key => [key, args[key]])));
     const result = await request('/api/workflow-catalog' + (query.size ? `?${query}` : ''), { sessionId: sessionIdentity(exec), signal: exec.signal });
     if (role === 'image-generation') return { ...Object.fromEntries(['modelProfile','requestedProfile','requestedProfileStatus','templateStatus'].filter(key=>result[key]!==undefined).map(key=>[key,result[key]])), modelProfiles: result.modelProfiles, models: result.models, templates: result.templates?.map(({ id, available, sha256 }) => ({ id, available, sha256 })), limits: result.limits, validationScope: result.validationScope };
     const catalog = { ...Object.fromEntries(['modelProfile', 'requestedProfile', 'requestedProfileStatus', 'mode', 'capabilities', 'coreModelLedger', 'templateStatus'].filter(key => result[key] !== undefined).map(key => [key, result[key]])), modelProfiles: result.modelProfiles, models: result.models, templates: result.templates, nodeSchemas: result.nodeSchemas, limits: result.limits, validationScope: result.validationScope };
-    return workflowCatalogForAgent(catalog, { role, details: args.details === true });
+    return workflowCatalogForAgent(catalog, role);
   });
   register('local_workflow_draft', 'Validate and save a ComfyUI API graph when the request requires a permitted graph change beyond an approved template. For prompt, canvas, seed or steps with an approved legacy template, call local_image_prepare and set parameters at render. Preserve the brief and invariants.', {
     productionId: productionParameter, expectedRevision: revisionParameter,
@@ -774,7 +774,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     state.uncertain.splice(state.uncertain.indexOf(pending),1);
     return {production:productionValue({production:p}),runId:run.id,requestId:run.requestId,phase:run.phase,otherUnresolved:state.uncertain.length,guidance:'This is the same saved run. Do not submit another render. Use local_render_result with this run ID to observe and reopen its saved result.'};
   });
-  register('local_production_evaluate', 'Before evaluating, use local_render_result with the productionId in this turn and inspect its actual output image. local_asset_view is for input/reference comparison and cannot bind output evaluation. Record criterion-by-criterion evidence and choose complete, revise with a concrete next change, or needs_user. Do not fabricate visual observations.', {
+  register('local_production_evaluate', 'Inspect the actual image delivered by render in this turn. Reopen it with local_render_result only if absent. Record each saved criterion with visible evidence and choose complete, revise with a concrete change, or needs_user.', {
     productionId: productionParameter, expectedRevision: {type:'integer',description:'Optional exact revision; if omitted, use the verified latest delivered binding.'}, runId: {type:'string',description:'Optional exact run ID; if omitted, resolve the unique latest completed run.'}, specHash: {type:'string',description:'Optional exact specification hash from the delivered image.'}, artifactSha256: {type:'string',description:'Optional exact delivered image hash; required if multiple candidate images were delivered.'},
     criteria: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: {
       id: requiredString('Exact saved criterion ID returned with the actual result; never invent, rename or approximate it.'),
