@@ -12,6 +12,7 @@ import {deliveryPosition, visibleDelivery} from './evaluation-evidence.mjs';
 import {createRuntimeConfig,runtimeRootOf} from '../shared/plugin-config.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
 import {createDurableRuntime} from './durable-runtime.mjs';
+import { MOSS_OFFICIAL_IDS, QWEN21_OFFICIAL_IDS } from '../../controller/media-modes.mjs';
 
 export const name = 'local-genai';
 export const inject = ['tools', 'attachments', 'llm', 'systemPrompt', 'agents', 'sessions', 'sessionPersistence'];
@@ -123,6 +124,30 @@ function productionValue(result) {
   if (!production || typeof production.id !== 'string' || !Number.isSafeInteger(production.revision)) throw new ControllerError('Controller did not return a production id and current revision.');
   const modelProfile = production.brief?.modelProfile ?? production.modelProfile;
   return { id: production.id, revision: production.revision, ...(typeof modelProfile === 'string' ? { modelProfile } : {}), ...Object.fromEntries(['mode', 'inputAssetId', 'inputAssetIds', 'peInputAssetIds', 'referenceAssetIds'].filter(key => production.brief?.[key] !== undefined).map(key => [key, production.brief[key]])), ...Object.fromEntries(['phase', 'latestRunId', 'bestRunId', 'status'].filter(key => production[key] !== undefined).map(key => [key, production[key]])) };
+}
+
+function preparationTool(modelProfile) {
+  if (MOSS_OFFICIAL_IDS.includes(modelProfile)) return 'local_moss_official_prepare';
+  if (QWEN21_OFFICIAL_IDS.includes(modelProfile)) return 'local_qwen21_prepare';
+  if (MODEL_PROFILES.includes(modelProfile)) return 'local_image_prepare';
+}
+
+export function productionPreparation(production) {
+  const tool = preparationTool(production.modelProfile);
+  if (!tool) return undefined;
+  const args = { productionId: production.id, expectedRevision: production.revision };
+  if (tool !== 'local_image_prepare') Object.assign(args, { modelProfile: production.modelProfile, mode: production.mode ?? 't2i' });
+  return { tool, args };
+}
+
+function preparedWorkflowResult(result, role) {
+  const production = productionValue(result);
+  const workflow = workflowMetadata(result.workflow);
+  const tool = preparationTool(production.modelProfile) === 'local_image_prepare' ? 'local_production_render' : 'local_prepared_render';
+  return {
+    production, workflow, validation: result.validation,
+    ...(role === 'studio' ? { next: { tool, args: { productionId: production.id, expectedRevision: production.revision, workflowId: workflow.id } } } : {}),
+  };
 }
 
 // Mirror the Controller's saved-brief contract without accepting extra fields.
@@ -460,6 +485,22 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     return value;
   }
   const definitions = [];
+  function createdProduction(result) {
+    const production = productionValue(result);
+    const next = role === 'studio' ? productionPreparation(production) : undefined;
+    return { production, ...(next ? { next } : {}) };
+  }
+
+  async function checkOfficialPreparation(args, exec, tool) {
+    const result = await request(`/api/productions/${encodeURIComponent(args.productionId)}`, { sessionId: sessionIdentity(exec), signal: exec.signal });
+    const production = productionValue(result);
+    const next = productionPreparation(production);
+    if (production.id !== args.productionId || !next) throw new ControllerError('The saved production or its approved template could not be identified.');
+    if (next.tool !== tool || args.modelProfile !== production.modelProfile || args.mode !== (production.mode ?? 't2i')) {
+      throw new ControllerError(`This tool or its model/mode does not match the saved production. No workflow was submitted. Follow ${JSON.stringify(next)} and supply its remaining required settings.`);
+    }
+  }
+
   function register(toolName, description, parameters, execute) {
     if (!allowedTools.has(toolName)) return;
     const definition = defineTool({
@@ -543,12 +584,12 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     referenceAssetIds: { type: 'array', items: { type: 'string' }, description: 'Imported references for interpretation/evaluation only, not automatic generator inputs.' },
   }, async (args, exec) => {
     const result = await mutate('/api/productions', { requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'create'), brief: { request: args.request, criteria: args.criteria, invariants: args.invariants, ...Object.fromEntries(['mode', 'inputAssetId', 'inputAssetIds', 'peInputAssetIds', 'referenceAssetIds', 'requiredConditions', 'preferredConditions', 'avoid', 'usage', 'steps'].filter(key => args[key] !== undefined).map(key => [key, args[key]])) }, ...(args.modelProfile === undefined ? {} : { modelProfile: args.modelProfile }) }, exec);
-    return { production: productionValue(result) };
+    return createdProduction(result);
   });
   register('local_production_reconcile_create', 'Read and verify one previously uncertain production create using its exact request ID. Never resend the create. Missing or mismatched evidence remains unresolved.', {
     requestId: requiredString('The exact request ID returned for the uncertain production create.'),
   }, async (args, exec) => {
-    if(durable){const value=await durable.reconcile({operation:'create',requestId:args.requestId,exec});if(value.receipt?.state==='rejected')return {state:'rejected',requestId:args.requestId,reconciled:true};return {production:productionValue({production:value.productions[0]}),requestId:args.requestId,reconciled:true};}
+    if(durable){const value=await durable.reconcile({operation:'create',requestId:args.requestId,exec});if(value.receipt?.state==='rejected')return {state:'rejected',requestId:args.requestId,reconciled:true};return {...createdProduction({production:value.productions[0]}),requestId:args.requestId,reconciled:true};}
     const sessionId=sessionIdentity(exec),state=stateFor(sessionId);
     const candidates=state.uncertain.filter(x=>x.path==='/api/productions'&&x.requestId===args.requestId);
     if(state.active||candidates.length!==1)throw new ControllerError('The exact uncertain create cannot be uniquely reconciled while other operations are active.');
@@ -560,7 +601,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     if(!p||p.sessionId!==sessionId||p.requestId!==args.requestId||typeof p.id!=='string'||!p.id||!Number.isSafeInteger(p.revision)||p.revision<0||serialized!==JSON.stringify(expected)||typeof p.briefHash!=='string'||createHash('sha256').update(serialized??'').digest('hex')!==p.briefHash)throw new ControllerError('Saved production ownership, request or brief differs; keep the original request unresolved.');
     if(state.active||!state.uncertain.includes(pending))throw new ControllerError('The request state changed during reconciliation; retry only this read.');
     state.uncertain.splice(state.uncertain.indexOf(pending),1);
-    return {production:productionValue({production:p}),requestId:args.requestId,reconciled:true,otherUnresolved:state.uncertain.length};
+    return {...createdProduction({production:p}),requestId:args.requestId,reconciled:true,otherUnresolved:state.uncertain.length};
   });
   if(durable){
     register('local_mutation_pending','List this conversation’s unresolved owned operations and their request identities without sending or retrying them. Use the matching read-only reconciliation; missing or uncertain evidence remains on hold.',{},async(_args,exec)=>({pending:durable.pending(exec),guidance:'Do not resend or replace a pending operation. Reconcile the exact operation, requestId and targetId using the matching read-only tool; if its identity or evidence is unavailable, ask maintenance.'}));
@@ -588,18 +629,28 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     const result = await mutate('/api/workflows/draft', {...args,requestId:requestIdFor(sessionIdentity(exec),exec.callId,'workflow')}, exec);
     return { production: productionValue(result), workflow: workflowMetadata(result.workflow), validation: result.validation };
   });
-  register('local_moss_official_prepare', 'Statically validate and save a fixed official MOSS graph without generation. Explicitly supply prompt, negativePrompt, seed, canvas and steps in official; then use local_prepared_render without retyping them. Inline promptEnhancer is unavailable; optional PE is a separate reviewed stage. Use only input-purpose assets in production order.', {
+  register('local_moss_official_prepare', 'Prepare only moss-image-sft-official-v1 or moss-image-base-official-v1 as directed by the saved production. Saves without generating. Set prompt, negativePrompt, seed, canvas and steps in official, then use the returned next action. Optional PE is a separate stage.', {
     productionId: productionParameter, expectedRevision: revisionParameter, modelProfile: {...modelProfileParameter,required:true}, mode: {...modeParameter,required:true}, rationale:requiredString('Concrete reason for this workflow.'),
     official: {...objectSchema,required:true,description:'Declarative fields: prompt, negativePrompt, seed (decimal string), width, height, steps; optional precision int8 or bf16, cfg, sampler, scheduler, skipLayerGuidance, layoutBoxes, controlStrength, controlStart, controlEnd, geometryOutput. Prompt enhancement is not available.'},
     inputRoles:{type:'array',items:{type:'object',additionalProperties:false,properties:{id:requiredString('Input-purpose asset ID in production order'),role:requiredString('source, edit-reference, depth-map or color-map')}}},
     enhancementRunId:{type:'string',description:'Optional accepted MOSS PE run ID. Use its exact accepted text as official.prompt so the controller records the link in the workflow selection and generation history.'},
-  },async(args,exec)=>{const result=await mutate('/api/workflows/draft',{...args,requestId:requestIdFor(sessionIdentity(exec),exec.callId,'workflow')},exec);const w=result.workflow;return {production:productionValue(result),workflow:workflowMetadata(w),renderParameters:Object.fromEntries(['prompt','negativePrompt','seed','width','height','steps'].map(k=>[k,w.request[k]??({negativePrompt:'',width:1024,height:1024,steps:w.mode==='edit'?30:25}[k])])),validation:result.validation};});
-  register('local_qwen21_prepare','Statically validate and save a Qwen 2.1 fixed graph; no generation. Official UI templates expose 10 image inputs; this controller can use up to 16 when the installed native node exposes them. Import input-purpose images in explicit order. Prompt enhancement is a separate optional stage, unavailable until qualified.',{
+  }, async (args, exec) => {
+    await checkOfficialPreparation(args, exec, 'local_moss_official_prepare');
+    const result = await mutate('/api/workflows/draft', { ...args, requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'workflow') }, exec);
+    const w = result.workflow;
+    return { ...preparedWorkflowResult(result, role), renderParameters: Object.fromEntries(['prompt','negativePrompt','seed','width','height','steps'].map(k=>[k,w.request[k]??({negativePrompt:'',width:1024,height:1024,steps:w.mode==='edit'?30:25}[k])])) };
+  });
+  register('local_qwen21_prepare','Prepare only qwen-image-2.1-base-v1 or qwen-image-2.1-turbo-v1 as directed by the saved production. Saves without generating. Use ordered input-purpose assets within the catalog limit, then follow the returned next action. Prompt enhancement is a separate stage.',{
     productionId:productionParameter,expectedRevision:revisionParameter,modelProfile:{...modelProfileParameter,required:true},mode:{...modeParameter,required:true},rationale:requiredString('Reason for this workflow.'),
     official:{...objectSchema,required:true,description:'Fields prompt, negativePrompt, seed, optional width, height, steps, cfg, precision int8/bf16, encoder int8/bf16, vae official/textureFix, turboLora, editResolution, customSize, cacheDevice and cacheDtype. CFG 1 ignores negative conditioning, so a nonempty negative prompt requires explicit CFG other than 1. Turbo uses exactly 8 steps.'},
     inputAssetIds:{type:'array',items:{type:'string'},description:'Exact ordered input-purpose asset IDs from the production brief, up to the live catalog limit (at most 16; official UI templates expose 10); empty for t2i.'},
     enhancementRunId:{type:'string',description:'Optional accepted Qwen PE run ID; its exact accepted text must equal official.prompt.'},
-  },async(args,exec)=>{const result=await mutate('/api/workflows/draft',{...args,requestId:requestIdFor(sessionIdentity(exec),exec.callId,'workflow')},exec),w=result.workflow;return {production:productionValue(result),workflow:workflowMetadata(w),renderParameters:{prompt:w.request.prompt,negativePrompt:w.request.negativePrompt??'',seed:w.request.seed??'42',width:w.output.width,height:w.output.height,steps:w.request.steps??(w.request.variant==='turbo'?8:25)},negativePromptEffective:w.negativePromptEffective,validation:result.validation};});
+  }, async (args, exec) => {
+    await checkOfficialPreparation(args, exec, 'local_qwen21_prepare');
+    const result = await mutate('/api/workflows/draft', { ...args, requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'workflow') }, exec);
+    const w = result.workflow;
+    return { ...preparedWorkflowResult(result, role), renderParameters: { prompt: w.request.prompt, negativePrompt: w.request.negativePrompt ?? '', seed: w.request.seed ?? '42', width: w.output.width, height: w.output.height, steps: w.request.steps ?? (w.request.variant === 'turbo' ? 8 : 25) }, negativePromptEffective: w.negativePromptEffective };
+  });
   async function peResult(productionId,query,exec,{wait=false,family='moss'}={}){
     const sessionId=sessionIdentity(exec),began=now(),base=`/api/${family}-pe`,field=family==='qwen'?'qwenPe':'mossPe',decisionField=family==='qwen'?'qwenPeDecision':'mossPeDecision';let run;
     if(query.requestId){
@@ -668,6 +719,8 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     const sessionId = sessionIdentity(exec);
     const production = productionValue(await request(`/api/productions/${encodeURIComponent(args.productionId)}`, { sessionId, signal: exec.signal }));
     if (production.id !== args.productionId || production.revision !== args.expectedRevision || !MODEL_PROFILES.includes(production.modelProfile)) throw new ControllerError('The production identity, current revision or fixed image model does not match. Reconcile it before preparing a template.');
+    const next = productionPreparation(production);
+    if (next.tool !== 'local_image_prepare') throw new ControllerError(`This production uses a different preparation tool. No workflow was submitted. Follow ${JSON.stringify(next)} and supply its remaining required settings.`);
     // A text-to-image production persists inputAssetId:null. URLSearchParams
     // must not turn it into the literal asset id "null".
     const modeFields = Object.fromEntries(['mode', 'inputAssetId'].filter(key => production[key] !== undefined && production[key] !== null).map(key => [key, production[key]]));
@@ -681,7 +734,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       if (received.id !== production.id || received.modelProfile !== production.modelProfile || received.revision !== args.expectedRevision + 1
         || typeof value.workflow?.id !== 'string' || value.workflow.modelProfile !== production.modelProfile || !/^[a-f0-9]{64}$/.test(value.workflow.sha256 ?? '')) throw new Error('Mismatched prepared workflow receipt');
     } });
-    return { production: productionValue(result), workflow: workflowMetadata(result.workflow), validation: result.validation, template: { id: template.id, sha256: template.sha256 } };
+    return { ...preparedWorkflowResult(result, role), template: { id: template.id, sha256: template.sha256 } };
   });
   register('local_workflow_reconcile','Read and verify an uncertain workflow preparation using its exact request ID and production ID. Never submit another draft. Missing or conflicting evidence remains unresolved.',{
     productionId:productionParameter,requestId:requiredString('Exact request ID from the uncertain workflow preparation.'),

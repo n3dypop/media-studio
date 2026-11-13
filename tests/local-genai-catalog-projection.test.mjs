@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { workflowCatalogForAgent } from '../apps/dsh-plugins/local-genai/index.mjs';
+import { productionPreparation, workflowCatalogForAgent } from '../apps/dsh-plugins/local-genai/index.mjs';
 
 test('studio catalog keeps template selection usable without returning a graph or node schemas', () => {
   const modelProfile = 'moss-image-sft-int8-v1';
@@ -23,4 +23,19 @@ test('studio catalog keeps template selection usable without returning a graph o
   assert.equal(Object.hasOwn(compact, 'nodeSchemas'), false);
   assert.equal(Object.hasOwn(compact, 'coreModelLedger'), false);
   assert.equal(workflowCatalogForAgent(catalog, 'workflow-development'), catalog);
+});
+
+test('the next preparation follows the saved model and revision', () => {
+  const production = { id: 'saved-production', revision: 2 };
+  const identity = { productionId: production.id, expectedRevision: production.revision };
+  assert.deepEqual(productionPreparation({ ...production, modelProfile: 'moss-image-sft-int8-v1' }), {
+    tool: 'local_image_prepare', args: identity,
+  });
+  assert.deepEqual(productionPreparation({ ...production, modelProfile: 'moss-image-sft-official-v1', mode: 'edit' }), {
+    tool: 'local_moss_official_prepare', args: { ...identity, modelProfile: 'moss-image-sft-official-v1', mode: 'edit' },
+  });
+  assert.deepEqual(productionPreparation({ ...production, modelProfile: 'qwen-image-2.1-turbo-v1' }), {
+    tool: 'local_qwen21_prepare', args: { ...identity, modelProfile: 'qwen-image-2.1-turbo-v1', mode: 't2i' },
+  });
+  assert.equal(productionPreparation({ ...production, modelProfile: 'unavailable-profile' }), undefined);
 });
