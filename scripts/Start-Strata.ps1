@@ -39,7 +39,7 @@ function Status {
     return $status
 }
 $receiptPath=ProjectPath 'data/strata/installation.json'
-if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) { throw 'Strata is not prepared. Run the approved Install-Strata.ps1 -Install first.' }
+if (-not (Test-Path -LiteralPath $receiptPath -PathType Leaf)) { throw "Strata installation record is missing: $receiptPath. Restore the record for this model or prepare a new installation with the matching Strata release." }
 $receipt=Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'Service-Paths.ps1')
 $environment=Get-Content -LiteralPath (ProjectPath 'config/environment.json') -Raw | ConvertFrom-Json
