@@ -37,3 +37,17 @@ export function visibleDelivery(session, evaluationCallId, binding, artifactSha2
     return needed.every(({id})=>{const count=counts.get(id)??0;if(!count)return false;counts.set(id,count-1);return true;});
   } catch { return false; }
 }
+
+// Resolve only a single, still-visible image result from this exact turn.
+// A previous session, another candidate, video, or a compacted image requires
+// the caller to select and reopen the intended production explicitly.
+export function singleVisibleImageDelivery(session, evaluationCallId, bindings) {
+  const matches = [];
+  for (const binding of bindings) {
+    const hashes = [...binding.hashes];
+    if (hashes.some(hash => visibleDelivery(session, evaluationCallId, binding, hash))) matches.push(binding);
+    if (matches.length > 1) return null;
+  }
+  const [binding] = matches;
+  return binding && !binding.videoHash && binding.imageAttachments.length === 1 && binding.hashes.size === 1 ? binding : null;
+}

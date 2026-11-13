@@ -8,7 +8,7 @@ import { installRoleRestriction } from './role-scope.mjs';
 import { listUserImages, imageImportBody, assetReceipt } from './inputs.mjs';
 import {executionEvidence} from './execution-evidence.mjs';
 import {dshPreflightDiagnostic} from './preflight-diagnostic.mjs';
-import {deliveryPosition, visibleDelivery} from './evaluation-evidence.mjs';
+import {deliveryPosition, singleVisibleImageDelivery, visibleDelivery} from './evaluation-evidence.mjs';
 import {createRuntimeConfig,runtimeRootOf} from '../shared/plugin-config.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
 import {createDurableRuntime} from './durable-runtime.mjs';
@@ -763,7 +763,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     productionId: productionParameter, expectedRevision: revisionParameter, workflowId: requiredString('Validated workflow id.'), prompt: requiredString('Model-specific prompt preserving the brief.'),
     negativePrompt: { type: 'string', required: true, description: 'Negative conditioning text supported by the selected image workflow.' }, seed: requiredString('Decimal seed from 0 to 9007199254740991, preserving comparison conditions.'),
     width: { type: 'integer', required: true }, height: { type: 'integer', required: true }, steps: { type: 'integer', required: true },
-    enhancer: { type: 'boolean', required: true, description: 'false initially. true only when a configured enhancer is justified; unavailable enhancement must fail explicitly.' },
+    enhancer: { type: 'boolean', ...(role === 'studio' ? {} : { required: true }), description: 'Defaults to false in Media Studio. Enable only when a configured enhancer is justified.' },
     denoise: { type: 'number', description: 'i2i/edit only: strictly between zero and one; preserve the input as requested.' },
     frames: { type: 'integer', description: 'Video frame count within the selected catalog limits.' },
     fps: { type: 'integer', description: 'Video frame rate within the selected catalog limits.' },
@@ -778,7 +778,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     await requireVision(exec);
     try {
       const { productionId, ...spec } = args;
-      const result = await mutate(`/api/productions/${encodeURIComponent(productionId)}/render`, { ...spec, requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'render') }, exec, { validateResult: value => { if (typeof value?.run?.id !== 'string') throw new Error('Missing run'); } });
+      const result = await mutate(`/api/productions/${encodeURIComponent(productionId)}/render`, { ...spec, enhancer: spec.enhancer ?? false, requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'render') }, exec, { validateResult: value => { if (typeof value?.run?.id !== 'string') throw new Error('Missing run'); } });
       return await getResult(productionId, result.run.id, exec);
     } catch (error) {
       if (exec.signal.aborted) {
@@ -828,7 +828,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     return {production:productionValue({production:p}),runId:run.id,requestId:run.requestId,phase:run.phase,otherUnresolved:state.uncertain.length,guidance:'This is the same saved run. Do not submit another render. Use local_render_result with this run ID to observe and reopen its saved result.'};
   });
   register('local_production_evaluate', 'Inspect the actual image delivered by render in this turn. Reopen it with local_render_result only if absent. Record each saved criterion with visible evidence and choose complete, revise with a concrete change, or needs_user.', {
-    productionId: productionParameter, expectedRevision: {type:'integer',description:'Optional exact revision; if omitted, use the verified latest delivered binding.'}, runId: {type:'string',description:'Optional exact run ID; if omitted, resolve the unique latest completed run.'}, specHash: {type:'string',description:'Optional exact specification hash from the delivered image.'}, artifactSha256: {type:'string',description:'Optional exact delivered image hash; required if multiple candidate images were delivered.'},
+    productionId: role === 'studio' ? {type:'string',description:'Omit for a single visible image delivered in this turn. Use the exact production ID if there are multiple candidates.'} : productionParameter, expectedRevision: {type:'integer',description:'Optional exact revision; if omitted, use the verified latest delivered binding.'}, runId: {type:'string',description:'Optional exact run ID; if omitted, resolve the unique latest completed run.'}, specHash: {type:'string',description:'Optional exact specification hash from the delivered image.'}, artifactSha256: {type:'string',description:'Optional exact delivered image hash; required if multiple candidate images were delivered.'},
     criteria: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: {
       id: requiredString('Exact saved criterion ID returned with the actual result; never invent, rename or approximate it.'),
       status: { type: 'string', enum: ['met', 'unmet', 'unverified'], description: 'Use unverified when actual evidence is insufficient.' },
@@ -838,17 +838,23 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       location: { type: 'string', description: 'Affected image region or video time when known.' },
       severity: { type: 'string', enum: ['low', 'medium', 'high'] },
     } } },
-    decision: { type: 'string', enum: ['complete', 'revise', 'needs_user'], required: true }, nextChange: { type: 'string', required: true, description: 'Concrete next change for revise; otherwise an explanation or empty string.' },
+    decision: { type: 'string', enum: ['complete', 'revise', 'needs_user'], required: true }, nextChange: { type: 'string', ...(role === 'studio' ? {} : { required: true }), description: 'Concrete next change for revise. Otherwise optional in Media Studio.' },
     strengths: { type: 'array', items: { type: 'string' }, description: 'Observed strengths to preserve.' },
     bestRunId: { type: 'string', description: 'Best candidate among the current run and previously evaluated runs, not necessarily the latest.' },
     evaluationFrameSha256s: { type: 'array', items: { type: 'string' }, description: 'Video only: unchanged hashes of all three delivered evaluation frames; artifactSha256 is the primary MP4 hash.' },
   }, async (args, exec) => {
     const sessionId=sessionIdentity(exec);
+    const selected = args.productionId === undefined && role === 'studio'
+      ? singleVisibleImageDelivery(exec.agent.session, exec.callId, [...delivered.values()].filter(binding => binding.sessionId === sessionId))
+      : null;
+    const productionId = args.productionId ?? selected?.productionId;
+    if (!productionId) throw new ControllerError('Specify the exact production ID or reopen one candidate in this turn before evaluating. No evaluation was sent.');
     const implicit=['runId','specHash','artifactSha256','expectedRevision'].some(key=>args[key]===undefined);
-    const resolved=implicit?await latestCompleted(args.productionId,exec):null;
+    const resolved=implicit||selected?await latestCompleted(productionId,exec):null;
     const runId=args.runId??resolved.run.id;
     if(resolved&&args.runId!==undefined&&args.runId!==resolved.run.id)throw new ControllerError('The explicit run ID differs from the latest completed run; do not substitute a candidate.');
     const binding = delivered.get(`${sessionId}:${runId}`);
+    if (selected && selected !== binding) throw new ControllerError('The visible image is no longer the latest candidate. Reopen the intended candidate before evaluating.');
     if(resolved&&binding&&(resolved.run.specHash!==binding.specHash||resolved.production.revision!==binding.revision))throw new ControllerError('The production revision or run specification changed after image delivery. Call local_render_result with this productionId in the current turn and inspect the returned output; local_asset_view does not bind output evaluation.');
     let artifactSha256=args.artifactSha256;
     if(artifactSha256===undefined&&binding){
@@ -857,9 +863,9 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       else throw new ControllerError('More than one delivered image is eligible; specify the actual image hash.');
     }
     const specHash=args.specHash??binding?.specHash,expectedRevision=args.expectedRevision??binding?.revision;
-    if (!binding || binding.productionId !== args.productionId || binding.specHash !== specHash || !binding.hashes.has(artifactSha256) || binding.revision !== expectedRevision) {
+    if (!binding || binding.productionId !== productionId || binding.specHash !== specHash || !binding.hashes.has(artifactSha256) || binding.revision !== expectedRevision) {
       const state = evaluationStates.get(`${sessionId}:${runId}`);
-      if (state?.productionId === args.productionId && state.reason === 'already-evaluated') throw new ControllerError('Evaluation binding differs: this run was already evaluated. Do not evaluate it again or regenerate. Read local_production_history for the saved decision and report the candidate and unverified points.');
+      if (state?.productionId === productionId && state.reason === 'already-evaluated') throw new ControllerError('Evaluation binding differs: this run was already evaluated. Do not evaluate it again or regenerate. Read local_production_history for the saved decision and report the candidate and unverified points.');
       throw new ControllerError('Evaluation binding differs from the image actually delivered in this conversation. Call local_render_result with this productionId in the current turn and inspect the returned output; local_asset_view does not bind output evaluation. Do not guess a binding.');
     }
     if(!visibleDelivery(exec.agent.session,exec.callId,binding,artifactSha256))throw new ControllerError('The image is not verifiably present in the current turn model context. Call local_render_result with this productionId in this turn and inspect the returned output before evaluating; local_asset_view does not bind output evaluation. No evaluation was sent.');
@@ -876,10 +882,10 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       throw new ControllerError(`Evaluation criterion IDs must match the saved brief exactly. No evaluation was sent. Saved criterion IDs: ${JSON.stringify(binding.criterionIds)}. Proposed status per saved criterion, not persisted: ${JSON.stringify(progress)}. Missing and not submitted: ${JSON.stringify(missing)}. Unexpected: ${JSON.stringify(unexpected)}. Duplicates: ${JSON.stringify(duplicates)}. Reopen local_render_result for exact descriptions; mark unverified only for a saved criterion with insufficient evidence.`);
     }
     if (binding.videoHash === artifactSha256 && (!Array.isArray(args.evaluationFrameSha256s) || args.evaluationFrameSha256s.length !== 3 || !Array.isArray(binding.frameHashes) || JSON.stringify([...args.evaluationFrameSha256s].sort()) !== JSON.stringify([...binding.frameHashes].sort()))) throw new ControllerError('Video evaluation requires all three actually delivered frame hashes.');
-    if (!args.criteria.length || args.criteria.some(item => !item.evidence?.trim() || (item.status === undefined && typeof item.met !== 'boolean')) || (args.decision === 'revise' && !args.nextChange.trim())) throw new ControllerError('Each criterion needs a status and observed evidence or the reason it is unverified; revision needs a concrete change.');
+    if (!args.criteria.length || args.criteria.some(item => !item.evidence?.trim() || (item.status === undefined && typeof item.met !== 'boolean')) || (args.decision === 'revise' && !args.nextChange?.trim())) throw new ControllerError('Each criterion needs a status and observed evidence or the reason it is unverified; revision needs a concrete change.');
     if (args.decision === 'complete' && (binding.videoHash === artifactSha256 || args.criteria.some(item => item.status === 'unverified' || item.status === 'unmet' || item.met === false))) throw new ControllerError('No evaluation was sent: complete requires every criterion to be met and full supported review. If evidence is unavailable and there is no justified change, submit the same evaluation with decision needs_user; use revise only for a concrete improvement. Do not create a new production to bypass this.');
-    const { productionId, ...provided } = args;
-    const evaluation={...provided,runId,specHash,artifactSha256,expectedRevision};
+    const { productionId: _explicitProduction, ...provided } = args;
+    const evaluation={...provided,nextChange:provided.nextChange??'',runId,specHash,artifactSha256,expectedRevision};
     const result = await mutate(`/api/productions/${encodeURIComponent(productionId)}/evaluate`, evaluation, exec);
     return { production: productionValue(result), decision: args.decision };
   });
@@ -989,7 +995,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     const frameHashes = frames.map(frame => frame.artifactSha256);
     const videoReady = video && frames.length === 3 && Array.isArray(value.evaluationFrameSha256s) && value.evaluationFrameSha256s.length === 3 && JSON.stringify([...value.evaluationFrameSha256s].sort()) === JSON.stringify([...frameHashes].sort());
     if (videoReady) hashes.add(video.artifactSha256);
-    delivered.set(`${sessionId}:${value.runId}`, { productionId: value.productionId, specHash: value.specHash, revision: value.productionRevision, criterionIds: [...value.evaluation.criterionIds], hashes,position,
+    delivered.set(`${sessionId}:${value.runId}`, { sessionId, productionId: value.productionId, specHash: value.specHash, revision: value.productionRevision, criterionIds: [...value.evaluation.criterionIds], hashes,position,
       imageAttachments:retained.map(image=>({id:image.attachment.attachmentId,hash:image.artifactSha256})),
       ...(videoReady ? { videoHash: video.artifactSha256, frameHashes,frameAttachments:frames.map(image=>({id:image.attachment.attachmentId,hash:image.artifactSha256})) } : {}) });
   };
