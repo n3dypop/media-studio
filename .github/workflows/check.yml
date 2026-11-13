@@ -23,7 +23,7 @@ jobs:
       - name: Run tests with a canonical temporary directory
         shell: pwsh
         run: |
-          $scratch = Join-Path $env:GITHUB_WORKSPACE '.test-scratch'
+          $scratch = Join-Path (Split-Path -Parent $env:GITHUB_WORKSPACE) ('media-studio-test-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT)
           New-Item -ItemType Directory -Path $scratch | Out-Null
           $canonical = node -e "console.log(require('node:fs').realpathSync(process.argv[1]))" $scratch
           if ($LASTEXITCODE -ne 0 -or -not $canonical) { throw 'Test directory could not be resolved' }
