@@ -8,8 +8,19 @@ Two roots have different responsibilities:
   defines their update and responsibility boundaries.
 - `MEDIA_STUDIO_HOME` is the absolute private runtime root. It owns effective
   `config/`, `data/`, managed process receipts, logs, caches, inputs and outputs.
-  Model files stay in their configured locations; ComfyUI weights normally live
-  in ComfyUI's `models/` directory.
+  Keep ComfyUI weights in the node's model category under `ComfyUI/models/`,
+  for example `diffusion_models/`, `text_encoders/`, `loras/`, or `vae/`.
+  Keep Strata GGUF shards and their vision projector together under
+  `Strata/models/`, with the corresponding prepared pack under `Strata/packs/`.
+  These directories contain local assets and are excluded from product Git
+  history.
+
+The managed Strata configuration and its installation receipt remain in the
+private runtime. When relocating assets, update `--native`, `--ple-gguf`,
+`--pack`, and the vision `model` and `mmproj` paths together. Verify that the
+shard names and contents still match the pack, then record the new configuration
+SHA-256 in the installation receipt. Validate the launcher before starting,
+then test model loading and image input through the managed provider.
 
 Set the environment variable before calling the package scripts:
 

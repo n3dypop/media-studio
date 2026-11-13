@@ -7,7 +7,7 @@
   "type": "module",
   "engines": {
     "node": ">=24 <25",
-    "dsh": "0.2.2-rc.1"
+    "dsh": "0.2.2-rc.1 || 0.2.2-rc.3"
   },
   "scripts": {
     "check": "node scripts/check-package.mjs",

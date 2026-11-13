@@ -15,14 +15,14 @@ test('public package contains only local source, operational docs and permitted 
   const result=await checkPackage({root,syntax:false});assert.equal(result.name,metadata.name);assert.equal(result.plugins,metadata.name.endsWith('/dsh-plugins')?4:6);assert.ok(result.modules>0);
 });
 test('root metadata uses the documented dependency-free checks and publication boundary',()=>{
-  assert.equal(metadata.private,true);assert.equal(metadata.license,'MIT');assert.equal(metadata.type,'module');assert.equal(metadata.engines?.dsh,'0.2.2-rc.1');assert.equal(metadata.scripts.check,'node scripts/check-package.mjs');assert.equal(metadata.scripts.test,'node --test --test-concurrency=1 tests/*.test.mjs');assert.ok(ids);
+  assert.equal(metadata.private,true);assert.equal(metadata.license,'MIT');assert.equal(metadata.type,'module');assert.equal(metadata.engines?.dsh,'0.2.2-rc.1 || 0.2.2-rc.3');assert.equal(metadata.scripts.check,'node scripts/check-package.mjs');assert.equal(metadata.scripts.test,'node --test --test-concurrency=1 tests/*.test.mjs');assert.ok(ids);
 });
 test('plugin manifests expose their local host and web client entries consistently',async()=>{
   const actual=[];for(const entry of await readdir(join(root,'apps/dsh-plugins'),{withFileTypes:true})){if(!entry.isDirectory()||entry.name==='shared')continue;try{await lstat(join(root,'apps/dsh-plugins',entry.name,'package.json'));actual.push(entry.name);}catch(error){if(error.code!=='ENOENT')throw error;}}
   assert.deepEqual(actual.sort(),[...ids].sort());
   for(const id of ids){
     const prefix='apps/dsh-plugins/'+id+'/',manifest=await json(prefix+'package.json');
-    assert.equal(manifest.private,true,id);assert.equal(manifest.type,'module',id);assert.equal(manifest.engines?.dsh,id==='local-genai'?'0.2.2-rc.1':'0.2.1-rc.5 || 0.2.2-rc.1',id);
+    assert.equal(manifest.private,true,id);assert.equal(manifest.type,'module',id);assert.equal(manifest.engines?.dsh,id==='local-genai'?'0.2.2-rc.1 || 0.2.2-rc.3':'0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.3',id);
     const host=typeof manifest.exports==='string'?manifest.exports:manifest.exports?.['.']??manifest.main;
     assert.ok(['./index.mjs','index.mjs'].includes(host),id);assert.match(await text(prefix+'index.mjs'),/\bexport\s+(?:const\s+name|(?:async\s+)?function\s+apply)\b/,id);
     if(id==='local-genai')continue;

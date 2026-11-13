@@ -50,7 +50,8 @@ require hash-verified private copies; see [external workflow assets](docs/extern
 
 ## Install and configure
 
-The host compatibility target is DSH Web and Windows Desktop **0.2.2-rc.1**,
+The host compatibility targets are DSH Web and Windows Desktop **0.2.2-rc.1**
+and **0.2.2-rc.3**,
 with Node.js **24**, Windows and PowerShell 7. DSH 0.2.1-rc.5 lacks the
 managed-provider hook required by the durable integration. Its bundle loader
 may show `Unknown agent preset: local-image` instead of a version-specific
@@ -88,10 +89,6 @@ The clone has its own Git history. Existing private installations may retain
 their data in `.runtime/media-studio`; moving plugin source does not require
 moving conversations, images or models.
 
-Desktop integration has been tested in isolated Hosts. The live Desktop
-profile, its existing plugins and the normal authenticated launcher still need
-qualification before these steps can be used as an installation procedure.
-
 Desktop keeps a separate source clone, for example under
 `%USERPROFILE%\.dsh\plugins\n3dypop\media-studio`. After initializing and
 fully quitting Desktop, use its bundled `dsh` command to add that clone as a
@@ -106,8 +103,10 @@ Desktop configuration must consistently set `controllerSessionNamespace` to
 `studio-controls`, `studio-monitor`, and `studio-services`. The gateway and
 preset child also require `desktopPackagedRuntime: true`; the Desktop controls
 and services require the same explicit runtime setting. Keep the Web settings
-unchanged. These settings were qualified in isolated Hosts; a live profile,
-native actions, GPU generation and user acceptance require their own checks.
+unchanged. A Windows Desktop installation using this layout has returned a
+generated image to its conversation, saved the original PNG through the result
+card, and recorded the Strata review. After installation, verify the same path
+with the model, hardware and DSH build you will use.
 Stop the old Host only after its work has finished before opening the other.
 The Controller status endpoint is a snapshot, not an admission lock; separately
 confirm the previous Host is fully exited, ComfyUI queue, Strata inference and
@@ -145,7 +144,15 @@ The agent uses six Skills as needed: `generation-plan`,
 `comfyui-workflow-build`, `comfyui-generate`, `output-review`,
 `generation-iterate` and `resource-control`. The live catalog determines which
 models, modes and inputs are actually available. A template or Skill alone is
-not evidence that an installed model can execute it.
+not evidence that an installed model can execute it. The production preset
+selects approved templates and adjusts their exposed settings. Use the
+[extension handoff](docs/extensions.md) when a request needs a new template,
+model, custom node, or graph connection.
+
+Generated images appear in the conversation and can be reopened from the saved
+run. Use **Save original PNG** on the result card for the full artifact. The
+conversation attachment is a preview. After an interrupted delivery, reopen the
+existing run to recover its image without submitting a second generation.
 
 **Resources** opens **Media & Resources**, showing production stages, elapsed
 time and Strata/ComfyUI resource observations. Settings contain launch paths and
@@ -156,9 +163,8 @@ and page retrieval require their own explicit approvals.
 The Controller owns resource exclusion, process identity, jobs and receipts.
 After a timeout, inspect the original job/request ID. If its outcome cannot be
 verified, keep it pending and do not submit another generation automatically.
-Review examines actual output
-and records unmet or unverified criteria. Agent approval and user satisfaction
-are separate outcomes.
+Review examines actual output and records unmet or unverified criteria. The user
+decides whether to adopt the candidate.
 
 ## Update and validate
 
