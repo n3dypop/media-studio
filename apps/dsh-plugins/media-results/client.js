@@ -2,7 +2,7 @@
 window.__ModuleLoader__.load({
   id:"local-genai-media-results",
   factory(require){
-    const {createElement:h,useSyncExternalStore}=require('react');
+    const {createElement:h,useState,useSyncExternalStore}=require('react');
     const {Button}=require('@deepseek-ai/dsh-client-ui-primitives');
     const card={padding:'18px',margin:'12px 0',border:'1px solid var(--dsw-alias-border-l2)',borderRadius:'var(--dsw-radius-lg, 16px)',background:'var(--dsw-alias-bg-layer-1)',color:'var(--dsw-alias-label-primary)',fontFamily:'inherit',minWidth:0,boxSizing:'border-box'};
     const heading={display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px',flexWrap:'wrap',margin:'0 0 10px',fontSize:'0.95rem',fontWeight:650,lineHeight:1.5};
@@ -63,6 +63,26 @@ window.__ModuleLoader__.load({
     function originalUrl(sessionId,original){
       if(typeof sessionId!=='string'||!sessionId||!originalReference({runId:original?.runId},{name:original?.name,artifactSha256:original?.sha256}))throw new Error('A recorded original is required.');
       return `/api/local-studio/original-image?sessionId=${encodeURIComponent(sessionId)}&runId=${encodeURIComponent(original.runId)}&name=${encodeURIComponent(original.name)}&sha256=${encodeURIComponent(original.sha256)}`;
+    }
+    async function saveOriginalPng(fileActions, url, name) {
+      return fileActions.save({ url, name, mediaType:'image/png', async read(signal) {
+        const response = await fetch(url, { signal, credentials:'same-origin', cache:'no-store', redirect:'error' });
+        if (!response.ok || response.headers.get('content-type')?.split(';')[0] !== 'image/png') throw new Error('Original PNG unavailable');
+        return response.blob();
+      } }, 'download');
+    }
+    function OriginalPng({ url, name, fileActions }) {
+      const [status, setStatus] = useState('');
+      if (!fileActions) return h('a',{href:url,download:name,style:linkStyle},'元のPNGを保存');
+      async function save() {
+        setStatus('保存中');
+        try {
+          const result = await saveOriginalPng(fileActions, url, name);
+          setStatus(result.status === 'saved' ? '保存しました' : result.status === 'requested' ? 'ダウンロードを開始しました' : '');
+        } catch { setStatus('原本PNGを保存できませんでした'); }
+      }
+      return h('div',null,h(Button,{type:'button',variant:'outline',size:'sm',onClick:save,disabled:status==='保存中'},'元のPNGを保存'),
+        status?h('span',{role:'status',style:{...secondary,marginLeft:'8px'}},status):null);
     }
     function VideoResult({attachment,loadVideo}){
       if(typeof loadVideo!=='function')return h('p',null,'動画は保存されています。会話を開き直すと再生できます。');
@@ -158,7 +178,7 @@ window.__ModuleLoader__.load({
           h('figure',{key:image.displayKey??image.attachment.attachmentId,style:{margin:0,minWidth:0,padding:'10px',border:'1px solid var(--dsw-alias-border-l2)',borderRadius:'var(--dsw-radius-md, 12px)',background:'var(--dsw-alias-bg-layer-2)'}},
             images.length>1||image.evaluationFrame?h('figcaption',{style:{...secondary,marginBottom:'8px',fontWeight:600}},image.label):null,
             h(ImageContent,{imageFactories:props.imageFactories,renderFactorySlot:props.renderFactorySlot,images:[image],loadImage:props.loadImage,align:'start',compact:false,thumbnail:false}),
-            image.original&&typeof props.loadOriginal==='function'?h('figcaption',{style:{marginTop:'10px'}},h('a',{href:props.loadOriginal(image.original),download:image.original.name,style:linkStyle},'元のPNGを保存')):null,
+            image.original&&typeof props.loadOriginal==='function'?h('figcaption',{style:{marginTop:'10px'}},h(OriginalPng,{url:props.loadOriginal(image.original),name:image.original.name,fileActions:props.fileActions})):null,
             h('div',{style:{...secondary,marginTop:'6px'}},`${image.attachment.width} × ${image.attachment.height} px · プレビュー ${sizeText(image.attachment.bytes)}`)))));
     }
     /** Use the final content, never metadata's stale copy or a guessed artifact URL. */
@@ -214,8 +234,8 @@ window.__ModuleLoader__.load({
       const imageFactories=createImageFactories(ctx);
       for(const toolName of Object.keys(titles))ctx.slots.inject('tool.call.toolview',()=>ctx.slots.register({name:'tool.call.toolview',key:toolName,inject:sessionId=>({sessionId,imageFactories,loadVideo:attachment=>videoUrl(sessionId,attachment)})},LocalProductionView));
       ctx.effect(()=>ctx.uiConversation.events.register(generatedImagesDefinition));
-      ctx.slots.inject('conversation.chat.turnTail',()=>ctx.slots.register({name:'conversation.chat.turnTail',id:imageDataKey,order:10,inject:sessionId=>({imageFactories,loadImage:Object.assign(attachment=>ctx.uiConversation.imageUrl(sessionId,attachment),{peek:attachment=>ctx.uiConversation.peekImageUrl(sessionId,attachment)}),loadVideo:attachment=>videoUrl(sessionId,attachment),loadOriginal:original=>originalUrl(sessionId,original)})},GeneratedImagesTail));
+      ctx.slots.inject('conversation.chat.turnTail',()=>ctx.slots.register({name:'conversation.chat.turnTail',id:imageDataKey,order:10,inject:sessionId=>({imageFactories,loadImage:Object.assign(attachment=>ctx.uiConversation.imageUrl(sessionId,attachment),{peek:attachment=>ctx.uiConversation.peekImageUrl(sessionId,attachment)}),loadVideo:attachment=>videoUrl(sessionId,attachment),loadOriginal:original=>originalUrl(sessionId,original),fileActions:ctx.fileActions})},GeneratedImagesTail));
     }
-    return{inject:['slots','uiConversation'],apply,createImageFactories,ImageContent,LocalProductionView,resultView,GeneratedImagesTail,generatedImagesDefinition,generatedImagesForTurn,generatedVideosForTurn,VideoResult,videoUrl,originalUrl};
+    return{inject:{slots:{required:true},uiConversation:{required:true},fileActions:{required:false}},apply,createImageFactories,ImageContent,LocalProductionView,resultView,GeneratedImagesTail,generatedImagesDefinition,generatedImagesForTurn,generatedVideosForTurn,VideoResult,videoUrl,originalUrl,saveOriginalPng};
   },
 });
