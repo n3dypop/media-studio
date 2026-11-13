@@ -395,10 +395,11 @@ function compactDefinition(definition) {
 }
 
 export class WorkflowRegistry {
-  constructor({ root, adapter,assets=null } = {}) {
+  constructor({ root, directory, adapter,assets=null } = {}) {
     if (typeof root !== 'string' || !root || !adapter?.request || !adapter?.profile) throw new TypeError('WorkflowRegistry needs a workspace root and ComfyAdapter');
     this.root = path.resolve(root);
-    this.directory = path.join(this.root, 'workflows', 'drafts');
+    if (directory !== undefined && !path.isAbsolute(directory)) throw new TypeError('Workflow storage must be absolute');
+    this.directory = directory ?? path.join(this.root, 'workflows', 'drafts');
     this.adapter = adapter;
     this.assets=assets;
     this.profileId=adapter.modelProfile??PROFILE;

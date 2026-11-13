@@ -1,5 +1,5 @@
 // Official upstream prompt text is private runtime data, not source code.
-// Only fixed, hash-pinned files below MEDIA_STUDIO_HOME are accepted.
+// Read fixed, hash-pinned prompts from the configured ComfyUI installation.
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {isAbsolute,join} from 'node:path';
@@ -18,7 +18,17 @@ export function readExternalPrompt(family,mode){
   const root=process.env.MEDIA_STUDIO_HOME;
   if(typeof root!=='string'||!root||!isAbsolute(root))throw new Error('Official prompt unavailable: MEDIA_STUDIO_HOME must be an absolute private runtime directory');
   const directory=family==='moss'?'moss-image':'qwen-image-2.1';
-  const path=join(root,'external','comfy-workflow-templates','workflows','source',directory,spec.file);
+  let settings;
+  try {
+    settings=JSON.parse(readFileSync(join(root,'config','environment.json'),'utf8'));
+  } catch (error) {
+    if (error.code!=='ENOENT') throw error;
+  }
+  const comfyDirectory=settings?.comfyWorkflowLayout==='product' ? settings.comfyDirectory : undefined;
+  if (settings?.comfyWorkflowLayout==='product' && (typeof comfyDirectory!=='string'||!isAbsolute(comfyDirectory))) throw new Error('ComfyUI product path must be absolute');
+  const source=comfyDirectory===undefined ? join(root,'external','comfy-workflow-templates','workflows','source')
+    : join(comfyDirectory,'user','media-studio','official','workflows','source');
+  const path=join(source,directory,spec.file);
   let bytes;
   try{bytes=readFileSync(path);}catch{throw new Error('Official prompt unavailable in the private runtime');}
   if(bytes.length>65536||createHash('sha256').update(bytes).digest('hex')!==spec.sha256)throw new Error('Official prompt hash mismatch');

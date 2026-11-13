@@ -49,7 +49,11 @@ $engine=ProductPath ([IO.Path]::GetRelativePath($productRoot,[string]$receipt.en
 if (-not $control.StartsWith((Join-Path $productRoot '.runtime/terminal/') ,[StringComparison]::OrdinalIgnoreCase) -or -not $engine.StartsWith((Join-Path $productRoot '.runtime/components/engine/'),[StringComparison]::OrdinalIgnoreCase)) { throw 'Strata component paths differ from the prepared product layout.' }
 $data=ProjectPath 'data/strata'
 $executable=Get-StrataPythonExecutable $environment $receipt
-$configuration=Join-Path $data 'serve-config.json'
+$configuration=if ($receipt.config -eq (Join-Path $data 'serve-config.json')) {
+    Join-Path $data 'serve-config.json'
+} else {
+    ProductPath '.runtime/local-serve/serve-config.json'
+}
 . (Join-Path $PSScriptRoot 'Strata-ConfigComparison.ps1')
 if ($receipt.workspace -ne $taskRoot -or $receipt.productRoot -ne $productRoot -or $receipt.control -ne $control -or $receipt.engine -ne $engine -or $receipt.config -ne $configuration -or $receipt.mtp -ne 'off' -or -not $receipt.prepared) { throw 'Installation identity does not match this workspace and product root.' }
 foreach ($path in @($executable,$configuration,(Join-Path $control 'serve/server.py'),(Join-Path $engine 'engine-component.json'),(Join-Path $data 'api-token'))) { if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Strata required file is missing: $path" } }

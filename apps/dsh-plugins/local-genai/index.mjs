@@ -5,7 +5,7 @@ import { loadDshBindings, loadDshScopeBindings, loadDshNativeExecutor, desktopPa
 import { selectNativeToolMode } from './native-tool-mode.mjs';
 import { agentRole, guideForRole } from './roles.mjs';
 import { installRoleRestriction } from './role-scope.mjs';
-import { listUserImages, imageImportBody, assetReceipt } from './inputs.mjs';
+import { listUserImages, imageImportBody, assetReceipt, currentUserRequest, requestedPngSize } from './inputs.mjs';
 import {executionEvidence} from './execution-evidence.mjs';
 import {dshPreflightDiagnostic} from './preflight-diagnostic.mjs';
 import {deliveryPosition, singleVisibleImageDelivery, visibleDelivery} from './evaluation-evidence.mjs';
@@ -488,7 +488,19 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   function createdProduction(result) {
     const production = productionValue(result);
     const next = role === 'studio' ? productionPreparation(production) : undefined;
-    return { production, ...(next ? { next } : {}) };
+    const size = requiredOutputSize(result.production);
+    return { production, ...(size ? { requiredOutputSize: size } : {}), ...(next ? { next } : {}) };
+  }
+
+  function requiredOutputSize(production) {
+    return role === 'studio' && production?.brief?.mode === 't2i' ? requestedPngSize(production.brief.request) : null;
+  }
+
+  function requireRequestedSize(production, {width, height}) {
+    const size = requiredOutputSize(production);
+    if (size && (width !== size.width || height !== size.height)) {
+      throw new ControllerError(`The requested PNG output is ${size.width}×${size.height}. Pass width=${size.width} and height=${size.height}. No workflow or generation was submitted.`);
+    }
   }
 
   async function checkOfficialPreparation(args, exec, tool) {
@@ -499,6 +511,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     if (next.tool !== tool || args.modelProfile !== production.modelProfile || args.mode !== (production.mode ?? 't2i')) {
       throw new ControllerError(`This tool or its model/mode does not match the saved production. No workflow was submitted. Follow ${JSON.stringify(next)} and supply its remaining required settings.`);
     }
+    requireRequestedSize(result.production, args.official);
   }
 
   function register(toolName, description, parameters, execute) {
@@ -568,7 +581,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   });
 
   register('local_production_create', 'Start one image production with the user brief, evaluation criteria and invariants. For new criteria use short sequential IDs C1, C2, ... unless the user explicitly specified IDs; preserve every full criterion. Saved IDs never change. Do not create a replacement after an uncertain response.', {
-    request: requiredString('The user request, without invented requirements.'),
+    request: role === 'studio' ? { type: 'string', description: 'Summarize the current request and any clarified requirements. For a direct text-to-image PNG request with one explicit output size, the tool preserves the original message.' } : requiredString('The user request, without invented requirements.'),
     criteria: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: { id: requiredString('For new productions prefer C1, C2, ... unless the user supplied an ID; never rename a saved ID.'), description: requiredString('Full observable completion criterion; do not omit requirements.') } } },
     invariants: { type: 'array', required: true, items: { type: 'string' } },
     requiredConditions: { type: 'array', items: { type: 'string' }, description: 'User requirements that must not be silently relaxed.' },
@@ -583,7 +596,10 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     peInputAssetIds: { type: 'array', items: { type: 'string' }, description: 'MOSS t2i/layout only: optional one explicitly imported input-purpose image used only by prompt enhancement. Separate asset ID from generator inputs and observation references.' },
     referenceAssetIds: { type: 'array', items: { type: 'string' }, description: 'Imported references for interpretation/evaluation only, not automatic generator inputs.' },
   }, async (args, exec) => {
-    const result = await mutate('/api/productions', { requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'create'), brief: { request: args.request, criteria: args.criteria, invariants: args.invariants, ...Object.fromEntries(['mode', 'inputAssetId', 'inputAssetIds', 'peInputAssetIds', 'referenceAssetIds', 'requiredConditions', 'preferredConditions', 'avoid', 'usage', 'steps'].filter(key => args[key] !== undefined).map(key => [key, args[key]])) }, ...(args.modelProfile === undefined ? {} : { modelProfile: args.modelProfile }) }, exec);
+    const message = role === 'studio' && (args.mode ?? 't2i') === 't2i' ? currentUserRequest(exec.agent.session) : null;
+    const sourceRequest = requestedPngSize(message) ? message : args.request;
+    if (!sourceRequest?.trim()) throw new ControllerError('Pass the nonempty user request. No production was created.');
+    const result = await mutate('/api/productions', { requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'create'), brief: { request: sourceRequest, criteria: args.criteria, invariants: args.invariants, ...Object.fromEntries(['mode', 'inputAssetId', 'inputAssetIds', 'peInputAssetIds', 'referenceAssetIds', 'requiredConditions', 'preferredConditions', 'avoid', 'usage', 'steps'].filter(key => args[key] !== undefined).map(key => [key, args[key]])) }, ...(args.modelProfile === undefined ? {} : { modelProfile: args.modelProfile }) }, exec);
     return createdProduction(result);
   });
   register('local_production_reconcile_create', 'Read and verify one previously uncertain production create using its exact request ID. Never resend the create. Missing or mismatched evidence remains unresolved.', {
@@ -717,7 +733,8 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     rationale: requiredString('Concrete reason for preparing this approved template or for the next prompt/settings change.'),
   }, async (args, exec) => {
     const sessionId = sessionIdentity(exec);
-    const production = productionValue(await request(`/api/productions/${encodeURIComponent(args.productionId)}`, { sessionId, signal: exec.signal }));
+    const saved = await request(`/api/productions/${encodeURIComponent(args.productionId)}`, { sessionId, signal: exec.signal });
+    const production = productionValue(saved);
     if (production.id !== args.productionId || production.revision !== args.expectedRevision || !MODEL_PROFILES.includes(production.modelProfile)) throw new ControllerError('The production identity, current revision or fixed image model does not match. Reconcile it before preparing a template.');
     const next = productionPreparation(production);
     if (next.tool !== 'local_image_prepare') throw new ControllerError(`This production uses a different preparation tool. No workflow was submitted. Follow ${JSON.stringify(next)} and supply its remaining required settings.`);
@@ -734,7 +751,10 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       if (received.id !== production.id || received.modelProfile !== production.modelProfile || received.revision !== args.expectedRevision + 1
         || typeof value.workflow?.id !== 'string' || value.workflow.modelProfile !== production.modelProfile || !/^[a-f0-9]{64}$/.test(value.workflow.sha256 ?? '')) throw new Error('Mismatched prepared workflow receipt');
     } });
-    return { ...preparedWorkflowResult(result, role), template: { id: template.id, sha256: template.sha256 } };
+    const prepared = preparedWorkflowResult(result, role);
+    const size = requiredOutputSize(saved.production);
+    if (size) Object.assign(prepared.next.args, size);
+    return { ...prepared, template: { id: template.id, sha256: template.sha256 } };
   });
   register('local_workflow_reconcile','Read and verify an uncertain workflow preparation using its exact request ID and production ID. Never submit another draft. Missing or conflicting evidence remains unresolved.',{
     productionId:productionParameter,requestId:requiredString('Exact request ID from the uncertain workflow preparation.'),
@@ -776,6 +796,10 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       || (args.frames !== undefined && (!Number.isSafeInteger(args.frames) || !((args.frames >= 17 && args.frames <= 49 && args.frames % 4 === 1) || (args.frames >= 124 && args.frames <= 362 && (args.frames - 5) % 17 === 0))))
       || (args.fps !== undefined && (!Number.isSafeInteger(args.fps) || args.fps < 1 || args.fps > 24))) throw new ControllerError('Render dimensions, steps, seed or mode parameters are outside the supported bounds.');
     await requireVision(exec);
+    if (role === 'studio') {
+      const saved = await request(`/api/productions/${encodeURIComponent(args.productionId)}`, { sessionId: sessionIdentity(exec), signal: exec.signal });
+      requireRequestedSize(saved.production, args);
+    }
     try {
       const { productionId, ...spec } = args;
       const result = await mutate(`/api/productions/${encodeURIComponent(productionId)}/render`, { ...spec, enhancer: spec.enhancer ?? false, requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'render') }, exec, { validateResult: value => { if (typeof value?.run?.id !== 'string') throw new Error('Missing run'); } });

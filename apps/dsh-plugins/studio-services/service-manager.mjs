@@ -89,7 +89,7 @@ export async function createSystemAdapter({root,probeStopped=probeStoppedService
   if(strata.enabled&&!strataExe)throw Error('Strata Python requires explicit configuration or a prepared installation receipt.');
   descriptions={Strata:{executable:strataExe,url:strata.baseUrl},ComfyUI:{executable:environment.comfyPythonExecutable,url:`http://127.0.0.1:${environment.comfyPort}`},Controller:{executable:node,url:`http://127.0.0.1:${controller.port}`}};
   for(const description of Object.values(descriptions)){const url=new URL(description.url);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw Error('Unexpected service address');}
-  paths={readOnly:true,Strata:{executable:strataExe,configuration:join(root,'data/strata/serve-config.json')},ComfyUI:{directory:environment.comfyDirectory,executable:environment.comfyPythonExecutable},Controller:{entry:fileURLToPath(new URL('../../controller/server.mjs',import.meta.url)),executable:node},configurationFiles:['config/environment.json','config/controller.json','config/strata.json'].map(path=>join(root,path))};
+  paths={readOnly:true,Strata:{executable:strataExe,configuration:receipt?.config??join(root,'data/strata/serve-config.json')},ComfyUI:{directory:environment.comfyDirectory,executable:environment.comfyPythonExecutable},Controller:{entry:fileURLToPath(new URL('../../controller/server.mjs',import.meta.url)),executable:node},configurationFiles:['config/environment.json','config/controller.json','config/strata.json'].map(path=>join(root,path))};
   configurationDirty=false;
   }
   await loadConfiguration();

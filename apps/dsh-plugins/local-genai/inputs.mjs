@@ -3,6 +3,31 @@ import { createHash } from 'node:crypto';
 const MAX_INPUT_BYTES = 10 * 1024 * 1024;
 const SUPPORTED = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
+export function currentUserRequest(session) {
+  const events = session?.snapshotEvents?.();
+  if (!Array.isArray(events)) return null;
+  const start = events.findLastIndex(event => event.type === 'turn/start');
+  if (start < 0) return null;
+  const messages = events.slice(start + 1).filter(event =>
+    event.type === 'user/message' && event.data?.source?.kind === 'user');
+  if (messages.length !== 1 || !Array.isArray(messages[0].data?.content)) return null;
+  const text = messages[0].data.content.filter(block => block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text).join('\n').trim();
+  return text && text.length <= 8000 ? text : null;
+}
+
+// A single explicit PNG size can be enforced without guessing which of
+// several dimensions or formats the user intends to generate.
+export function requestedPngSize(request) {
+  if (typeof request !== 'string') return null;
+  const dimensions = [...request.matchAll(/\b(\d{2,5})\s*[x×]\s*(\d{2,5})\b/giu)];
+  if (dimensions.length !== 1) return null;
+  const [size, width, height] = dimensions[0];
+  const suffix = request.slice(dimensions[0].index + size.length);
+  const output = /^\s*(?:px\s*)?(?:の\s*)?PNG(?:\s+output\b|\s*を\s*(?:\d+\s*枚\s*)?(?:生成|作成|出力))/iu;
+  return output.test(suffix) ? { width: Number(width), height: Number(height) } : null;
+}
+
 export function userImages(session) {
   if (typeof session?.deriveMessages !== 'function') throw new Error('The current DSH session cannot supply admitted image references.');
   const images = new Map();

@@ -35,6 +35,9 @@ const root=resolve(process.env.MEDIA_STUDIO_HOME||packageRoot);
 assertNoControllerPreopenGuard(root);
 const settings=JSON.parse(readFileSync(join(root,'config/environment.json'),'utf8'));
 const config=JSON.parse(readFileSync(join(root,'config/controller.json'),'utf8'));
+const workflowDirectory=settings.comfyWorkflowLayout!=='product' ? undefined
+  : isAbsolute(settings.comfyDirectory) ? join(settings.comfyDirectory,'user','media-studio','drafts') : null;
+if(workflowDirectory===null)throw new Error('ComfyUI product path must be absolute');
 if(config.experimentalHostIsolation!==undefined&&config.experimentalHostIsolation!==false)throw new Error('Host isolation is incomplete; strict Controller startup is disabled.');
 if(Object.hasOwn(config,'fixtureDesktopPaths'))throw new Error('Fixture-only Desktop paths are not available in the production Controller.');
 if(config.searchTurnOwnership!==undefined&&typeof config.searchTurnOwnership!=='boolean')throw new Error('Invalid search turn ownership configuration');
@@ -69,7 +72,7 @@ try {
   const adapter=new ComfyAdapter({baseUrl:comfyUrl,outputRoot:join(root,'outputs'),profilePath:profilePaths[config.profile],modelProfile:config.profile,profilePaths,assets});
   const verifyEpoch=createEpochVerifier({runtimePath:join(root,'runtime/ComfyUI.json'),expectedExecutable:settings.comfyPythonExecutable,baseUrl:comfyUrl,...epochProbe});
   const verifyRetiredEpoch=createRetiredEpochVerifier({expectedExecutable:settings.comfyPythonExecutable,baseUrl:comfyUrl});
-  const productions=new ProductionStore(store,{defaultModelProfile:config.profile,assets}),workflows=new WorkflowRegistry({root,adapter,assets});
+  const productions=new ProductionStore(store,{defaultModelProfile:config.profile,assets}),workflows=new WorkflowRegistry({root,directory:workflowDirectory,adapter,assets});
   const searchConfig=loadSearchConfiguration(root);
   // Search is always ownership- and handshake-protected. Legacy explicit false
   // disables search; it never selects an unprotected path. A missing probe
