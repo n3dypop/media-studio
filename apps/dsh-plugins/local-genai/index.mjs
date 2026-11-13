@@ -553,7 +553,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     if (role === 'image-generation') return { ...Object.fromEntries(['modelProfile','requestedProfile','requestedProfileStatus','templateStatus'].filter(key=>result[key]!==undefined).map(key=>[key,result[key]])), modelProfiles: result.modelProfiles, models: result.models, templates: result.templates?.map(({ id, available, sha256 }) => ({ id, available, sha256 })), limits: result.limits, validationScope: result.validationScope };
     return { ...Object.fromEntries(['modelProfile', 'requestedProfile', 'requestedProfileStatus', 'mode', 'capabilities', 'coreModelLedger', 'templateStatus'].filter(key => result[key] !== undefined).map(key => [key, result[key]])), modelProfiles: result.modelProfiles, models: result.models, templates: result.templates, nodeSchemas: result.nodeSchemas, limits: result.limits, validationScope: result.validationScope };
   });
-  register('local_workflow_draft', 'Validate a developed ComfyUI API graph and save a draft. Preserve the brief and invariants; use only discovered nodes and models.', {
+  register('local_workflow_draft', 'Validate and save a ComfyUI API graph when the request requires a permitted graph change beyond an approved template. For prompt, canvas, seed or steps with an approved legacy template, call local_image_prepare and set parameters at render. Preserve the brief and invariants.', {
     productionId: productionParameter, expectedRevision: revisionParameter,
     graph: { ...objectSchema, required: true, description: 'ComfyUI API-format node graph, not the UI workflow export.' },
     modelProfile: { ...modelProfileParameter, required: true }, rationale: requiredString('The concrete reason for this graph or change.'),
