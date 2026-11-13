@@ -782,27 +782,32 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   register('local_production_render', 'Render legacy approved workflows. For official MOSS or Qwen profiles use local_prepared_render instead. Wait for cleanup and return the actual saved image.', {
     productionId: productionParameter, expectedRevision: revisionParameter, workflowId: requiredString('Validated workflow id.'), prompt: requiredString('Model-specific prompt preserving the brief.'),
     negativePrompt: { type: 'string', required: true, description: 'Negative conditioning text supported by the selected image workflow.' }, seed: requiredString('Decimal seed from 0 to 9007199254740991, preserving comparison conditions.'),
-    width: { type: 'integer', required: true }, height: { type: 'integer', required: true }, steps: { type: 'integer', required: true },
+    width: { type: 'integer', ...(role === 'studio' ? {} : { required: true }), description: 'Width in pixels. May be omitted when the saved request fixes the output size.' },
+    height: { type: 'integer', ...(role === 'studio' ? {} : { required: true }), description: 'Height in pixels. May be omitted when the saved request fixes the output size.' },
+    steps: { type: 'integer', required: true },
     enhancer: { type: 'boolean', ...(role === 'studio' ? {} : { required: true }), description: 'Defaults to false in Media Studio. Enable only when a configured enhancer is justified.' },
     denoise: { type: 'number', description: 'i2i/edit only: strictly between zero and one; preserve the input as requested.' },
     frames: { type: 'integer', description: 'Video frame count within the selected catalog limits.' },
     fps: { type: 'integer', description: 'Video frame rate within the selected catalog limits.' },
   }, async (args, exec) => {
+    let spec = args;
+    if (role === 'studio') {
+      const saved = await request(`/api/productions/${encodeURIComponent(args.productionId)}`, { sessionId: sessionIdentity(exec), signal: exec.signal });
+      const size = requiredOutputSize(saved.production);
+      if (size) spec = { ...args, width: args.width ?? size.width, height: args.height ?? size.height };
+      requireRequestedSize(saved.production, spec);
+    }
     const validSize = role === 'studio'
-      ? [args.width, args.height].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 8192)
-      : [args.width, args.height].every(value => Number.isSafeInteger(value) && value >= 512 && value <= 1536 && value % 32 === 0) && args.width * args.height <= 1500000;
+      ? [spec.width, spec.height].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 8192)
+      : [spec.width, spec.height].every(value => Number.isSafeInteger(value) && value >= 512 && value <= 1536 && value % 32 === 0) && spec.width * spec.height <= 1500000;
     if (!/^(0|[1-9]\d{0,15})$/.test(args.seed) || BigInt(args.seed) > 9007199254740991n || !validSize || !Number.isSafeInteger(args.steps) || args.steps < 1 || args.steps > (role==='studio'?10000:40)
       || (args.denoise !== undefined && (!Number.isFinite(args.denoise) || args.denoise <= 0 || args.denoise >= 1))
       || (args.frames !== undefined && (!Number.isSafeInteger(args.frames) || !((args.frames >= 17 && args.frames <= 49 && args.frames % 4 === 1) || (args.frames >= 124 && args.frames <= 362 && (args.frames - 5) % 17 === 0))))
       || (args.fps !== undefined && (!Number.isSafeInteger(args.fps) || args.fps < 1 || args.fps > 24))) throw new ControllerError('Render dimensions, steps, seed or mode parameters are outside the supported bounds.');
     await requireVision(exec);
-    if (role === 'studio') {
-      const saved = await request(`/api/productions/${encodeURIComponent(args.productionId)}`, { sessionId: sessionIdentity(exec), signal: exec.signal });
-      requireRequestedSize(saved.production, args);
-    }
     try {
-      const { productionId, ...spec } = args;
-      const result = await mutate(`/api/productions/${encodeURIComponent(productionId)}/render`, { ...spec, enhancer: spec.enhancer ?? false, requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'render') }, exec, { validateResult: value => { if (typeof value?.run?.id !== 'string') throw new Error('Missing run'); } });
+      const { productionId, ...render } = spec;
+      const result = await mutate(`/api/productions/${encodeURIComponent(productionId)}/render`, { ...render, enhancer: render.enhancer ?? false, requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'render') }, exec, { validateResult: value => { if (typeof value?.run?.id !== 'string') throw new Error('Missing run'); } });
       return await getResult(productionId, result.run.id, exec);
     } catch (error) {
       if (exec.signal.aborted) {

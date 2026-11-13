@@ -15,12 +15,26 @@ Two roots have different responsibilities:
   These directories contain local assets and are excluded from product Git
   history.
 
-The managed Strata configuration and its installation receipt remain in the
-private runtime. When relocating assets, update `--native`, `--ple-gguf`,
-`--pack`, and the vision `model` and `mmproj` paths together. Verify that the
-shard names and contents still match the pack, then record the new configuration
-SHA-256 in the installation receipt. Validate the launcher before starting,
-then test model loading and image input through the managed provider.
+The Strata installation receipt is stored at
+`MEDIA_STUDIO_HOME/data/strata/installation.json`. It can point to the model
+configuration at `Strata/.runtime/local-serve/serve-config.json`, allowing the
+same model configuration to be used for standalone and managed startup. The
+launcher also accepts the original `data/strata/serve-config.json` location.
+When relocating assets, update `--native`, `--pack` and the vision `model` and
+`mmproj` paths. Update `--ple-gguf` if the model recipe sets it. Verify that
+the shards match the pack, record the new configuration SHA-256 in the
+installation receipt, and test model loading and image input.
+
+Set `comfyWorkflowLayout` to `"product"` in the private environment configuration
+to store Controller workflow snapshots in `ComfyUI/user/media-studio/drafts/`.
+Move the existing snapshot files byte-for-byte before changing the setting.
+Place the hash-pinned upstream enhancer prompts under
+`ComfyUI/user/media-studio/official/workflows/source/` with the original family
+subdirectories. ComfyUI editor exports belong to `ComfyUI/user/default/workflows/`.
+The packaged approved API profiles are the Controller's source templates.
+To organize model weights in family subdirectories without changing existing
+loader values, register those subdirectories in ComfyUI's `extra_model_paths.yaml`.
+Keep the loader name unique for its category and check the installed node schema.
 
 Set the environment variable before calling the package scripts:
 
