@@ -20,4 +20,15 @@ jobs:
         with:
           node-version: '24'
       - run: npm run check
-      - run: npm test
+      - name: Run tests with a canonical temporary directory
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $env:GITHUB_WORKSPACE '.test-scratch'
+          New-Item -ItemType Directory -Path $scratch | Out-Null
+          $canonical = node -e "console.log(require('node:fs').realpathSync(process.argv[1]))" $scratch
+          if ($LASTEXITCODE -ne 0 -or -not $canonical) { throw 'Test directory could not be resolved' }
+          $env:TEMP = $canonical
+          $env:TMP = $canonical
+          $env:TMPDIR = $canonical
+          npm test
+          exit $LASTEXITCODE
