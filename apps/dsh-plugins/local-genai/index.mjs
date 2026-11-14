@@ -776,16 +776,17 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     }
     const result = await request('/api/workflow-library?' + query, { sessionId: sessionIdentity(exec), signal: exec.signal });
     const row = result.workflows.length === 1 ? result.workflows[0] : null;
+    const riskGuidance = row?.recommendation ? ' State the specific non-recommended reason and evidence. Do not infer root cause, label bundled nodes custom, suggest a retry as a safe mitigation, stop other work, or claim any settings made this workflow safe.' : '';
     if (workflowId || row?.details) result.next = result.workflows.length
-      ? 'Answer now for this workflow only. Explain static status, any recommendation warning and requested details. Treat resize targets as settings, and listed weights as template dependencies. No further lookup is needed.'
+      ? 'Answer now for this workflow only. Explain static status and requested details. Treat resize targets as settings, and listed weights as template dependencies. No further lookup is needed.' + riskGuidance
       : 'No matching workflow was found. Check the ID or report that it could not be verified.';
     else if (!result.workflows.length) result.next = 'No matches. If useful, retry once with just the workflow name, then report the gap.';
     else if (search && result.total > 1) result.next = 'Use the chosen workflow ID for details. If the request does not identify one match, ask which workflow to use.';
-    if (brief && (guideRequest || maintenanceRequest) &&
+    if (brief && (guideRequest || maintenanceRequest || (row?.recommendation && !row.dshProfile)) &&
       (draftLookup || (row && (row.details || (workflowId && (row.id === workflowId || row.file === workflowId))) &&
         [row.id, row.file].some(value => typeof value === 'string' && brief.includes(value))))) {
       exec.deferContext?.({ role: 'user', id: randomUUID(), source: { kind: 'local-genai', form: 'notice', summary: 'catalog-answer-ready' }, content: [{
-        type: 'text', text: 'Use the catalog result to answer the selected workflow request now in the user’s language. State any recommendation warning before giving steps. Explain inputs, dependencies, steps or the maintenance gap as asked. Mark missing facts as unverified. A listed node is not necessarily a custom node. Do not look up sibling workflows, search externally or queue a job for this explanation.',
+        type: 'text', text: 'Use the catalog result to answer the selected workflow request now in the user’s language. Explain inputs, dependencies, steps or the maintenance gap as asked. Mark missing facts as unverified. A listed node is not necessarily a custom node. Do not look up sibling workflows, search externally or queue a job for this explanation.' + riskGuidance,
       }] });
     }
     if (args.includeResources === true) return result;

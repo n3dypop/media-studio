@@ -121,9 +121,14 @@ async function inspectWorkflow(root, entry, objects, resources, detailed) {
   const missingNodes = types.filter(type => !registeredNode(objects, type));
   const missingModels = entry.models.filter(model => !modelAvailable(objects, model)).map(model => model.name);
   const resourceReport = await resources(entry, createHash('sha256').update(bytes).digest('hex'));
+  const details = detailed ? workflowDetails(graph, nodes, types.slice(0, 80), entry.models, objects) : null;
+  if (details && resourceReport.recommendation) details.steps = [
+    'Read the recommendation and its evidence. Static dependency checks establish neither GPU fit nor execution safety.',
+    'Inspect the saved workflow and its listed inputs without queueing. Refer execution to the maintenance findings until a supported configuration is established.',
+  ];
   return { state: missingModels.length || missingNodes.length ? 'dependencies-missing' : 'static-ready',
     ...resourceReport,
-    ...(detailed && { details: workflowDetails(graph, nodes, types.slice(0, 80), entry.models, objects) }),
+    ...(details && { details }),
     ...(missingNodes.length && { missingNodes }), ...(missingModels.length && { missingModels }) };
 }
 

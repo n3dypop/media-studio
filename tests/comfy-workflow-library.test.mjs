@@ -305,6 +305,9 @@ test('resource figures use actual disk sizes and the matching workflow measureme
   const advisories = () => readRow({profile:'fixture',mode:'depth',advisoriesOnly:true,observeResources:observed,
     installed: () => assert.fail('Render advisory lookup does not call ComfyUI')});
   assert.equal((await advisories()).recommendation.summary, 'OS bugcheck');
+  const detailedRisk = await readRow({id:'sd-depth',observeResources:observed});
+  assert.match(detailedRisk.details.steps.join(' '), /without queueing/);
+  assert.doesNotMatch(detailedRisk.details.steps.join(' '), /queue the workflow/);
   await writeFile(canvasPath, graph + '\n');
   assert.deepEqual(await usage(), { modelDiskBytes: 1024, runtime: null });
   assert.equal((await advisories()).recommendation.shortfalls, undefined, 'Template edits invalidate numeric minima');
