@@ -159,15 +159,18 @@ window.__ModuleLoader__.load({
       return h(Dashboard,{state,error,now,auto,onAutoChange:value=>{writeAuto(value);setAuto(value);},renderActions:typeof renderSlot==='function'?job=>renderSlot('studio.monitor.production.actions',{job}):undefined,renderSessionActions:typeof renderSlot==='function'?()=>renderSlot('studio.monitor.session.actions',{}):undefined,renderServices:typeof renderSlot==='function'?()=>renderSlot('studio.monitor.services',{visible}):undefined});
     }
     const CATALOG='studio-catalog', LOCALE='studio.catalog', CATALOG_TITLE='Catalog';
-    function PaneButtons({open,considerAuto}){
+    function PaneButtons({open,considerAuto,composer=false}){
       const [error,setError]=useState('');
       useEffect(()=>{considerAuto?.();},[considerAuto]);
       const button=(kind,label,title,icon)=>h(Button,{variant:'outline',size:'sm',type:'button',title,onClick:()=>{
         try{open(kind);setError('');}catch{setError('右ペインを開けません。会話を選び直してください。');}
       }},h('span',{style:{display:'inline-flex',alignItems:'center',gap:6}},h(Icon,{kind:icon}),label));
-      return h('div',{style:{display:'flex',alignItems:'center',gap:6}},
+      return h('div',{style:{display:'flex',alignItems:'center',gap:6,...(composer?{justifyContent:'flex-end',flexWrap:'wrap',paddingInline:20}:{})}},
         button(CATALOG,CATALOG_TITLE,'Open Catalog','layers'),button(KIND,'Resources','Open Media & Resources','activity'),
         error?h('span',{role:'status'},error):null);
+    }
+    function BlankComposerButtons({session,open}){
+      return session.blank?h(PaneButtons,{open,composer:true}):null;
     }
     const dictionaries={
       ja:{description:'ComfyUIのワークフローとStrataのモデル',refresh:'更新',core:'Strata モデル',configured:'設定されたモデル',running:'稼働中のモデル',loaded:'ロード済み',unloaded:'未ロード',unknown:'確認できません',matched:'起動時の設定と一致',changed:'起動時の設定から変更あり',repository:'配布元',quantization:'量子化',weights:'重みファイル',revision:'配布版',context:'コンテキスト',engine:'エンジン',vision:'画像入力',available:'利用可能',off:'無効',workflows:'ComfyUI ワークフロー',search:'モデル名・キーワード',searchButton:'検索',media:'メディア',mode:'操作',all:'すべて',image:'画像',video:'動画',ready:'依存関係確認済み',missing:'不足あり',invalid:'テンプレート確認不可',standalone:'ComfyUI単体',managed:'DSH管理',details:'保存場所・詳細',models:'不足モデル',nodes:'不足ノード',prev:'前へ',next:'次へ',loading:'読み込み中…',error:'取得できません。サービスの状態を確認して更新してください。',empty:'該当するワークフローはありません。',unconfigured:'ワークフロー一覧が設定されていません。',checked:'取得時刻',scope:'実行可否はモデルと空き資源に依存します。'},
@@ -327,6 +330,10 @@ window.__ModuleLoader__.load({
           }catch{return false;}
         }}),
       },Catalog));
+      // DSH saves tab titles with each layout. Render the current name even in an older layout.
+      ctx.slots.inject('sidebar.right.pane.tab.title',()=>ctx.slots.register({
+        name:'sidebar.right.pane.tab.title',key:CATALOG,
+      },()=>CATALOG_TITLE));
       ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({name:'sidebar.right.pane.tab',key:ID,children:{'studio.monitor.production.actions':{kind:'list',scope:'session'},'studio.monitor.session.actions':{kind:'list',scope:'session'},'studio.monitor.services':{kind:'list',scope:'session'}},inject:sessionId=>({sessionId})},Monitor));
       ctx.slots.inject('conversation.session.header.utilities',()=>ctx.slots.register({name:'conversation.session.header.utilities',id:ID,order:-20,inject:sessionId=>({
         open:openFor(sessionId),
@@ -337,9 +344,9 @@ window.__ModuleLoader__.load({
           try{const current=ctx.sidebarRight.active();if(!ctx.sidebarRight.isExpanded()&&(!current||current.kind==='guide'))ctx.sidebarRight.openTab(KIND);}catch{}
         },
       })},PaneButtons));
-      ctx.slots.inject('conversation.hero.options',()=>ctx.slots.register({
-        name:'conversation.hero.options',id:ID,order:-20,inject:sessionId=>({open:openFor(sessionId)}),
-      },PaneButtons));
+      ctx.slots.inject('conversation.input.dock',()=>ctx.slots.register({
+        name:'conversation.input.dock',id:ID,order:-20,inject:sessionId=>({open:openFor(sessionId)}),
+      },BlankComposerButtons));
       ctx.effect(()=>()=>considered.clear());
     }
     return {inject:['slots','sidebarRight','sidebarRightTabs','locale','sessions','conversation'],apply,Monitor,PaneButtons,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog,workflowPrompt};

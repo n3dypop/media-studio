@@ -90,18 +90,23 @@ test('Catalog is beside Resources and opens its own pane in the mounted conversa
     } } },
     sidebarRight: { mounted: { getSnapshot: () => mounted }, openTab: kind => opened.push(kind) },
     sidebarRightTabs: { register: tab => tabs.push(tab) },
-    slots: { inject: (_, register) => register(), register: slot => slots.push(slot) },
+    slots: { inject: (_, register) => register(), register: (slot, render) => slots.push({ ...slot, render }) },
   });
   assert.deepEqual(tabs.map(tab => tab.kind), ['studio-monitor', 'studio-catalog']);
   assert.equal(tabs[1].title(), 'Catalog');
+  const tabTitle = slots.find(slot => slot.name === 'sidebar.right.pane.tab.title' && slot.key === 'studio-catalog');
+  assert.equal(tabTitle.render({ useTabInfo: () => ({ tab: { title: 'カタログ' } }) }), 'Catalog');
   const utility = slots.find(slot => slot.name === 'conversation.session.header.utilities');
   const buttons = client.PaneButtons(utility.inject('current')).children.filter(Boolean);
   assert.deepEqual(buttons.map(button => button.children[0].children[1]), ['Catalog', 'Resources']);
   buttons.forEach(button => button.props.onClick());
   assert.deepEqual(opened, ['studio-catalog', 'studio-monitor']);
-  const hero = slots.find(slot => slot.name === 'conversation.hero.options');
-  assert.equal(hero.inject('current').considerAuto, undefined);
-  client.PaneButtons(hero.inject('current')).children[0].props.onClick();
+  const dock = slots.find(slot => slot.name === 'conversation.input.dock');
+  const dockProps = dock.inject('current');
+  assert.equal(dock.render({ ...dockProps, session: { blank: false } }), null);
+  const launcher = dock.render({ ...dockProps, session: { blank: true } });
+  assert.equal(launcher.props.composer, true);
+  client.PaneButtons(launcher.props).children[0].props.onClick();
   assert.equal(opened.at(-1), 'studio-catalog');
 
   const catalog = slots.find(slot => slot.name === 'sidebar.right.pane.tab' && slot.key === 'studio-catalog');
