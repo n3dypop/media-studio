@@ -131,7 +131,9 @@ function referencedWorkflowIds(workflows, reference) {
   const ranges = new Map();
   for (const {id, family, label, file} of workflows) {
     const fullLabel = normalizedReference(label).startsWith(normalizedReference(family)) ? label : `${family} ${label}`;
-    for (const name of new Set([id, fullLabel, file, path.posix.basename(file)].map(normalizedReference))) {
+    const aliases = [id, fullLabel, file, path.posix.basename(file)];
+    if (label.length >= 8 && /\s/u.test(label)) aliases.push(label);
+    for (const name of new Set(aliases.map(normalizedReference))) {
       const literal = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       for (const {index} of text.matchAll(new RegExp(`(?<![a-z0-9_-])${literal}(?![a-z0-9_-])`, 'g'))) {
         const end = index + name.length, key = `${index}:${end}`;

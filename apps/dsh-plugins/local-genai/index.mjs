@@ -516,12 +516,11 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     });
     let result;
     for (const {text,fromOption} of currentUserChoices(exec.agent.session)) {
-      if (text.length > 256 || /[?？]|(?:使わない|実行しない|生成しない|案内のみ|説明のみ|手順|説明を|キャンセル|don['’]t|do not|no generation|cancel|instructions|explain)/iu.test(text)) {
-        if (/^(?:生成しない|実行しない|案内のみ|説明のみ|キャンセル|do not generate|no generation|cancel)(?:[。.!\s(（]|$)/iu.test(text)) {
-          return { status:'generation_declined', guidance:'The user declined generation. Finish without creating a production.' };
-        }
-        continue;
+      if (text.length > 256 || /[?？]/u.test(text)) continue;
+      if (/(?:実行しない|生成しない|案内のみ|説明のみ|キャンセル|do not generate|no generation|instructions only|\bcancel\b)/iu.test(text)) {
+        return { status:'generation_declined', guidance:'The user declined generation. Finish without creating a production.' };
       }
+      if (/(?:使わない|手順|説明を|don['’]t|do not|instructions|explain)/iu.test(text)) continue;
       const choice = await lookup(text);
       if (choice.total > 0) { result = choice; break; }
       // Older DSH option labels use the public model name rather than a
@@ -924,7 +923,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     state.uncertain.splice(state.uncertain.indexOf(pending),1);
     return {production:productionValue({production:p}),workflow:workflowMetadata(w),requestId:args.requestId,reconciled:true,otherUnresolved:state.uncertain.length};
   });
-  register('local_prepared_render','Run an already prepared official MOSS or Qwen workflow using only its stored exact request. Do not copy or modify prompt, negative prompt, seed, dimensions or enhancer flags here; create a new draft to change any setting.',{
+  register('local_prepared_render','Run a prepared workflow using its saved settings. Create a new draft to change any setting.',{
     productionId:productionParameter,expectedRevision:revisionParameter,workflowId:requiredString('The prepared workflow id.'),
   },async(args,exec)=>{
     if(!args||Object.keys(args).some(key=>!['productionId','expectedRevision','workflowId'].includes(key)))throw new ControllerError('Only productionId, expectedRevision and workflowId are accepted; create a new draft for changed settings.');
@@ -932,7 +931,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     try{const result=await mutate(`/api/productions/${encodeURIComponent(args.productionId)}/render-prepared`,{workflowId:args.workflowId,expectedRevision:args.expectedRevision,requestId:requestIdFor(sessionIdentity(exec),exec.callId,'render-prepared')},exec,{validateResult:value=>{if(typeof value?.run?.id!=='string')throw new Error('Missing run');}});return await getResult(args.productionId,result.run.id,exec);}
     catch(error){if(exec.signal.aborted){try{await requestCancel(args.productionId,exec);}catch{throw new ControllerError('Cancellation delivery is unconfirmed. Inspect this production.');}throw new ControllerError('Cancellation was requested. The CPU controller owns stop confirmation and output preservation.');}throw error;}
   });
-  register('local_production_render', 'Render legacy approved workflows. For official MOSS or Qwen profiles use local_prepared_render instead. Wait for cleanup and return the actual saved image.', {
+  register('local_production_render', 'Render legacy approved workflows and return the saved image. For workflows prepared with an explicit settings tool, use local_prepared_render.', {
     productionId: productionParameter, expectedRevision: revisionParameter, workflowId: requiredString('Validated workflow id.'), prompt: requiredString('Model-specific prompt preserving the brief.'),
     negativePrompt: { type: 'string', required: true, description: 'Negative conditioning text supported by the selected image workflow.' }, seed: requiredString('Decimal seed from 0 to 9007199254740991, preserving comparison conditions.'),
     width: { type: 'integer', ...(role === 'studio' ? {} : { required: true }), description: 'Width in pixels. May be omitted when the saved request fixes the output size.' },

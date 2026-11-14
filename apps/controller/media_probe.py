@@ -15,10 +15,12 @@ def verify_video(filename, expected):
     if source.is_symlink() or not source.is_file() or source.suffix.lower() != '.mp4' or not (32 < source.stat().st_size <= 64 * 1024**2):
         raise ValueError('Invalid bounded MP4 source')
     width, height, frames, fps = (expected[k] for k in ('width', 'height', 'frames', 'fps'))
+    if not all(type(v) is int for v in (width, height, frames, fps)):
+        raise ValueError('Unexpected video dimensions or duration')
     audio = expected.get('audio', False)
     legacy = not audio and 256 <= width <= 832 and 256 <= height <= 832 and width * height <= 500000 and 17 <= frames <= 49 and (frames - 1) % 4 == 0 and 8 <= fps <= 24
     fasth3 = audio is True and 256 <= width <= 768 and 256 <= height <= 768 and width % 32 == height % 32 == 0 and width * height <= 393216 and 22 <= frames <= 124 and (frames - 5) % 17 == 0 and fps == 24
-    if not all(type(v) is int for v in (width, height, frames, fps)) or not (legacy or fasth3):
+    if not (legacy or fasth3):
         raise ValueError('Unexpected video dimensions or duration')
     selected = {0, frames // 2, frames - 1}
     previews, decoded_hashes, timestamps = [], [], []

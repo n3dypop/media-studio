@@ -4,7 +4,7 @@ import path from 'node:path';
 import {UPSCALE_PROFILE,RESIZE_PROFILE,VIDEO_PROFILE_ID,H3_PROFILE_ID,RETIRED_VIDEO_PROFILES,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS,QWEN21_MAX_INPUTS,MODEL_PROFILES,LEGACY_QWEN_PROFILE as PROFILE,MOSS_PROFILE,assertActiveProfile,mediaIntent,assertModeProfile,assertInputBinding,comboChoices,mossInputTemplate} from './media-modes.mjs';
 import {buildMossOfficialGraph,validateMossOfficialGraph,inspectMossOfficialSchemas,resolveMossOwnedInputs} from './moss-official.mjs';
 import {QWEN21_PROFILES,buildQwen21Graph,validateQwen21Graph,resolveQwen21OwnedInputs} from './qwen21-workflow.mjs';
-import {catalogProfile,catalogLimits,catalogModels,buildCatalogGraph,validateCatalogGraph,validateCatalogSchemas} from './catalog-profiles.mjs';
+import {catalogProfile,catalogLimits,catalogInputRoles,catalogModels,buildCatalogGraph,validateCatalogGraph,validateCatalogSchemas} from './catalog-profiles.mjs';
 import {UPSCALE_NODE_TYPES,upscaleModels,upscaleTemplate,validateUpscaleGraph} from './upscale-workflow.mjs';
 import {profileLedger,nodeLedger,coreModelLedger} from './model-ledger.mjs';
 import {comfyWorkflowLibrary} from './comfy-workflow-library.mjs';
@@ -440,7 +440,8 @@ export class WorkflowRegistry {
         const options=comboChoices(objects[model.nodeType]?.input?.required?.[model.input]);
         node.inputs[model.input]=options?.find(value=>normalizeName(value)===normalizeName(model.name))??model.name;
       }
-      try{validateCatalogSchemas(mapped,objects);capabilities.push({modelProfile:id,mode:fixed.mode,inputRequired:fixed.inputs>0,qualification:'fixed-catalog-template',runtimeTested:qualified?.has(id)===true});}catch{}
+      try{validateCatalogSchemas(mapped,objects);capabilities.push({modelProfile:id,mode:fixed.mode,inputRequired:fixed.inputs>0,
+        inputRoles:catalogInputRoles(id),qualification:'fixed-catalog-template',runtimeTested:qualified?.has(id)===true});}catch{}
     }
     const exampleBinding={id:'11111111-1111-4111-8111-111111111111',purpose:'input',sha256:'a'.repeat(64),width:768,height:1024,comfyInputName:`controller-assets/${'a'.repeat(24)}/11111111-1111-4111-8111-111111111111-${'a'.repeat(64)}.png`};
     for(const id of MOSS_OFFICIAL_IDS.filter(id=>availableIds.has(id)))for(const candidateMode of (id===MOSS_OFFICIAL_IDS[0]?['t2i','layout','edit','depth']:['t2i','layout'])){

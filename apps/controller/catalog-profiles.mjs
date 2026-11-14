@@ -51,6 +51,13 @@ export function catalogLimits(id) {
     minGeneratorInputs:p.mode==='i2v'?1:p.inputs,maxGeneratorInputs:p.inputs};
 }
 
+export function catalogInputRoles(id) {
+  const profile=catalogProfile(id);
+  if(profile.family==='control')return [...profile.controls].map(role=>role==='adapter'?'depth':role);
+  if(profile.mode==='i2v')return ['first-frame','last-frame-optional'];
+  return profile.mode==='edit'?['source']:[];
+}
+
 export function catalogDefaultGraph(id) {
   const p=catalogProfile(id);
   const inputAssets=Array.from({length:p.inputs},(_,i)=>({
@@ -159,9 +166,19 @@ export function validateCatalogSchemas(graph,objects) {
     const required=schema.input?.required??{},optional=schema.input?.optional??{};
     for(const name of Object.keys(required))if(!Object.hasOwn(inputs,name))fail(`Missing required input: ${class_type}.${name}`);
     for(const [name,value] of Object.entries(inputs)){
-      const [field,child]=name.split('.');
+      const [field,...children]=name.split('.');
+      const child=children[0];
       const definition=required[field]??optional[field], kind=definition?.[0];
-      if(child&&kind==='COMFY_DYNAMICCOMBO_V3')continue;
+      if(child&&kind==='COMFY_DYNAMICCOMBO_V3'){
+        let branch=definition,path=field;
+        for(const component of children){
+          const selected=branch?.[1]?.options?.find(option=>option.key===inputs[path]);
+          branch=selected?.inputs?.required?.[component]??selected?.inputs?.optional?.[component];
+          path+='.'+component;
+        }
+        if(branch?.[0]!=='COMFY_DYNAMICCOMBO_V3'||!branch[1]?.options?.some(option=>option.key===value))fail(`Invalid installed option: ${class_type}.${name}`);
+        continue;
+      }
       const connection=Array.isArray(value);
       if(child&&kind==='COMFY_AUTOGROW_V3'){
         const t=definition[1].template;

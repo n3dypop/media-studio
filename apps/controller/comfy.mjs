@@ -182,18 +182,18 @@ function validatePng(bytes, expected) {
 // not prove the numerical effect of a parameter during GPU execution.
 function historyGraphEvidence(graph,extra,roles){
   const contract=extra?.workflow_contract,version=contract?.version;
-  if(![2,3,4,5].includes(version))return null;
+  if(![2,3,4,5,6].includes(version))return null;
   const sampler=graph?.[roles?.sampler??'sampler'],inputs=sampler?.inputs??{},req=contract.request??{};
   const modelNode=version===4?graph.unet:version===5?graph.diffusion:Object.values(graph).find(node=>node?.class_type==='UNETLoader');
-  const modelName=modelNode?.inputs?.unet_name;
+  const modelName=modelNode?.inputs?.unet_name??graph.checkpoint?.inputs?.ckpt_name;
   const seed=inputs.seed??inputs.noise_seed??graph.noise?.inputs?.noise_seed;
-  const steps=inputs.steps??graph.schedule?.inputs?.steps??(version===5&&req.variant==='turbo'?8:null);
+  const steps=inputs.steps??graph.schedule?.inputs?.steps??(version===5&&req.variant==='turbo'?8:version===6?req.steps:null);
   const cfg=inputs.cfg??graph.guider?.inputs?.cfg;
   const samplerName=inputs.sampler_name??graph.samplerSelect?.inputs?.sampler_name;
   const scheduler=inputs.scheduler??graph.schedule?.inputs?.scheduler;
   const evidence={source:'comfyui-history-graph',graphSha256:workflowGraphHash(graph),note:'Values recorded in the verified ComfyUI history graph; not independent measurements of numerical GPU behavior.'};
   if(typeof extra.model_profile==='string'&&/^[A-Za-z0-9_.-]{1,100}$/.test(extra.model_profile))evidence.modelProfile=extra.model_profile;
-  if(typeof modelName==='string'&&/^[A-Za-z0-9_.-]{1,200}$/.test(modelName))evidence.modelFile=modelName;
+  if(typeof modelName==='string'&&/^[A-Za-z0-9_.-]{1,200}$/.test(path.basename(modelName)))evidence.modelFile=path.basename(modelName);
   if(Number.isSafeInteger(seed)&&seed>=0)evidence.seed=String(seed);
   if(Number.isSafeInteger(steps)&&steps>0&&steps<=10000)evidence.steps=steps;
   if(typeof cfg==='number'&&Number.isFinite(cfg)&&cfg>=0&&cfg<=100)evidence.cfg=cfg;
@@ -649,18 +649,20 @@ export class ComfyAdapter {
     const dir=await ensureSafeDirectory(this.outputRoot,destination);
     const name=`${promptId}-${filename}`,file=path.join(dir,name);
     const bytes=await this.request('/view?'+new URLSearchParams({filename,subfolder:folder,type:'output'}),{bytes:true});
-    const sha256= createHash('sha256').update(bytes).digest('hex');
+    const digest=sha256(bytes);
     try {
       const handle=await open(file,'wx',0o600);
       try{await handle.writeFile(bytes);await handle.sync();}finally{await handle.close();}
     }catch(error){
-      if(error.code!=='EEXIST'||!(await lstat(file)).isFile()||!bytes.equals(await readFile(file)))throw error;
+      if(error.code!=='EEXIST')throw error;
+      const existing=await lstat(file);
+      if(!existing.isFile()||existing.isSymbolicLink()||existing.size!==bytes.length||!bytes.equals(await readFile(file)))throw new Error('Existing video differs or is unsafe');
     }
     const script=fileURLToPath(new URL('./media_probe.py',import.meta.url));
     const {stdout}=await executeFile(this.mediaPython,['-I','-B',script,file,JSON.stringify(expected)],{windowsHide:true,timeout:60000,maxBuffer:16384});
     const {previews,...media}=JSON.parse(stdout);
     if(!Array.isArray(previews)||previews.length!==3)throw new Error('Video frame verification is incomplete');
-    return [{name,path:file,sha256,mime:'video/mp4',...media},...previews.map(frame=>{
+    return [{name,path:file,sha256:digest,mime:'video/mp4',...media},...previews.map(frame=>{
       if(!frame.name.startsWith(path.parse(name).name+'-frame-')||path.basename(frame.name)!==frame.name)throw new Error('Invalid video frame reference');
       return {...frame,path:path.join(dir,frame.name)};
     })];
