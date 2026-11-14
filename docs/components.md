@@ -29,9 +29,10 @@ The workflow list supports keyword, media and operation filters.
 **Add to prompt** appends a request to the current draft and keeps its attachments.
 Managed workflows insert the exact profile and operation. Standalone entries insert
 a request for ComfyUI inputs and instructions. Send the draft when it is ready.
-The Strata section shows the model in the installation
-record and the running service's observed load state. Refresh updates both
-sections without loading models or queuing workflows. **Media & Resources**
+The Strata section shows the model specified in startup settings and the model
+currently loaded by Strata. An active server can show **Not loaded**. The settings
+warning appears when verified settings differ from those used at startup.
+Refresh updates both sections without loading models or queuing workflows. **Media & Resources**
 continues to show usage, service controls and conversation jobs.
 
 Controller changes that affect tools/catalog, workflow inputs, output evidence

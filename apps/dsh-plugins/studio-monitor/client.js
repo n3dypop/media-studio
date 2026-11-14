@@ -173,8 +173,8 @@ window.__ModuleLoader__.load({
       return session.blank?h(PaneButtons,{open,composer:true}):null;
     }
     const dictionaries={
-      ja:{description:'ComfyUIのワークフローとStrataのモデル',refresh:'更新',core:'Strata モデル',configured:'設定されたモデル',running:'稼働中のモデル',loaded:'ロード済み',unloaded:'未ロード',unknown:'確認できません',matched:'起動時の設定と一致',changed:'起動時の設定から変更あり',repository:'配布元',quantization:'量子化',weights:'重みファイル',revision:'配布版',context:'コンテキスト',engine:'エンジン',vision:'画像入力',available:'利用可能',off:'無効',workflows:'ComfyUI ワークフロー',search:'モデル名・キーワード',searchButton:'検索',media:'メディア',mode:'操作',all:'すべて',image:'画像',video:'動画',ready:'依存関係確認済み',missing:'不足あり',invalid:'テンプレート確認不可',standalone:'ComfyUI単体',managed:'DSH管理',details:'保存場所・詳細',models:'不足モデル',nodes:'不足ノード',prev:'前へ',next:'次へ',loading:'読み込み中…',error:'取得できません。サービスの状態を確認して更新してください。',empty:'該当するワークフローはありません。',unconfigured:'ワークフロー一覧が設定されていません。',checked:'取得時刻',scope:'実行可否はモデルと空き資源に依存します。'},
-      en:{description:'ComfyUI workflows and Strata model',refresh:'Refresh',core:'Strata model',configured:'Configured model',running:'Running model',loaded:'Loaded',unloaded:'Unloaded',unknown:'Unavailable',matched:'Matches startup configuration',changed:'Configuration changed since startup',repository:'Source',quantization:'Quantization',weights:'Weights file',revision:'Revision',context:'Context',engine:'Engine',vision:'Image input',available:'Available',off:'Disabled',workflows:'ComfyUI workflows',search:'Model or keyword',searchButton:'Search',media:'Media',mode:'Operation',all:'All',image:'Image',video:'Video',ready:'Dependencies found',missing:'Missing dependencies',invalid:'Template unavailable',standalone:'Standalone ComfyUI',managed:'Managed by DSH',details:'Location and details',models:'Missing models',nodes:'Missing nodes',prev:'Previous',next:'Next',loading:'Loading…',error:'Unable to load. Check the service and refresh.',empty:'No matching workflows.',unconfigured:'The workflow library is unconfigured.',checked:'Checked at',scope:'Execution depends on the model and available resources.'},
+      ja:{description:'ComfyUIのワークフローとStrataのモデル',refresh:'更新',core:'Strata モデル',configured:'起動設定のモデル',running:'ロード済みモデル',unloaded:'未ロード',unknown:'確認できません',changed:'起動時と設定が異なります',repository:'配布元',quantization:'量子化',weights:'重みファイル',revision:'配布版',context:'コンテキスト',engine:'エンジン',vision:'画像入力',available:'利用可能',off:'無効',workflows:'ComfyUI ワークフロー',search:'モデル名・キーワード',searchButton:'検索',media:'メディア',mode:'操作',all:'すべて',image:'画像',video:'動画',ready:'依存関係確認済み',missing:'不足あり',invalid:'テンプレート確認不可',standalone:'ComfyUI単体',managed:'DSH管理',details:'保存場所・詳細',models:'不足モデル',nodes:'不足ノード',prev:'前へ',next:'次へ',loading:'読み込み中…',error:'取得できません。サービスの状態を確認して更新してください。',empty:'該当するワークフローはありません。',unconfigured:'ワークフロー一覧が設定されていません。',checked:'取得時刻',scope:'実行可否はモデルと空き資源に依存します。'},
+      en:{description:'ComfyUI workflows and Strata model',refresh:'Refresh',core:'Strata model',configured:'Model in startup settings',running:'Loaded model',unloaded:'Not loaded',unknown:'Unavailable',changed:'Settings differ from startup',repository:'Source',quantization:'Quantization',weights:'Weights file',revision:'Revision',context:'Context',engine:'Engine',vision:'Image input',available:'Available',off:'Disabled',workflows:'ComfyUI workflows',search:'Model or keyword',searchButton:'Search',media:'Media',mode:'Operation',all:'All',image:'Image',video:'Video',ready:'Dependencies found',missing:'Missing dependencies',invalid:'Template unavailable',standalone:'Standalone ComfyUI',managed:'Managed by DSH',details:'Location and details',models:'Missing models',nodes:'Missing nodes',prev:'Previous',next:'Next',loading:'Loading…',error:'Unable to load. Check the service and refresh.',empty:'No matching workflows.',unconfigured:'The workflow library is unconfigured.',checked:'Checked at',scope:'Execution depends on the model and available resources.'},
     };
     Object.assign(dictionaries.ja,{
       addPrompt:'プロンプトに追加',promptAdded:'入力欄に追加しました。',promptBlocked:'入力欄に追加できません。会話と入力欄の状態を確認してください。',
@@ -223,14 +223,14 @@ window.__ModuleLoader__.load({
     const gib=value=>typeof value==='number'?`${(value/1024**3).toLocaleString(undefined,{maximumFractionDigits:2})} GiB`:null;
     function CoreModel({data,t}){
       const config=data.configured, live=data.running;
+      const loadedModel=live?.state==='loaded'?live.model??t('unknown'):t(live?.state??'unknown');
       const line=(key,value)=>value==null?null:[h('dt',{key:key+'-label'},t(key)),h('dd',{key},value)];
       const format=value=>value==null?null:Number(value).toLocaleString();
       return h('div',{className:'msc-content'},
         h('div',{className:'sm-statgrid'},
           stat(t('configured'),config?.model??t('unknown')),
-          stat(t('running'),live?.model??t(live?.state??'unknown'))),
-        live?h('div',{className:'msc-badges',role:'status'},badge(t(live.state),live.state==='loaded'?'success':'idle'),
-          data.configurationMatch!=null?badge(t(data.configurationMatch?'matched':'changed'),data.configurationMatch?'idle':'warning'):null):null,
+          stat(t('running'),loadedModel)),
+        data.configurationMatch===false?h('div',{className:'msc-badges',role:'status'},badge(t('changed'),'warning')):null,
         config||live?h('details',{className:'sm-history'},h('summary',null,t('details')),h('dl',{className:'msc-fields'},
           line('engine',live?.engine),line('context',format(live?.context??config?.context)),line('vision',live?.vision?t(live.vision):null),
           line('repository',config?.repository),line('quantization',config?.quantization),line('weights',config?.weights),line('revision',config?.revision),line('ramBudget',gib(config?.residentRamBudgetBytes)))):null,
@@ -349,6 +349,6 @@ window.__ModuleLoader__.load({
       },BlankComposerButtons));
       ctx.effect(()=>()=>considered.clear());
     }
-    return {inject:['slots','sidebarRight','sidebarRightTabs','locale','sessions','conversation'],apply,Monitor,PaneButtons,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog,workflowPrompt};
+    return {inject:['slots','sidebarRight','sidebarRightTabs','locale','sessions','conversation'],apply,Monitor,PaneButtons,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog,CoreModel,workflowPrompt};
   },
 });

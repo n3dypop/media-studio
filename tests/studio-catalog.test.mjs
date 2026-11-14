@@ -72,6 +72,31 @@ async function monitorClient(react = {}) {
   return entry.factory(id => id === 'react' ? react : { Button() {} });
 }
 
+test('Strata model cards distinguish configured, loaded, unloaded and unverified states', async () => {
+  const { CoreModel, apply } = await monitorClient({
+    createElement: (type, props, ...children) => ({ type, props, children }),
+  });
+  let labels;
+  apply({
+    effect: fn => fn(),
+    locale: { register: (_, dictionaries) => { labels = dictionaries.ja; } },
+    sidebarRightTabs: { register() {} },
+    slots: { inject() {} },
+  });
+  const configured = { model: 'startup-model' };
+  const loaded = { model: 'live-model', state: 'loaded' };
+  const render = (running, configurationMatch = null) => CoreModel({
+    data: { configured, running, configurationMatch }, t: key => labels[key],
+  });
+  const stats = view => view.children[0].children.map(card => card.children.map(part => part.children[0]));
+  const verified = render(loaded, true);
+  assert.deepEqual(stats(verified), [['起動設定のモデル', 'startup-model'], ['ロード済みモデル', 'live-model']]);
+  assert.equal(verified.children[1], null);
+  assert.deepEqual(stats(render({ ...loaded, state: 'unloaded' }))[1], ['ロード済みモデル', '未ロード']);
+  assert.deepEqual(stats(render(null))[1], ['ロード済みモデル', '確認できません']);
+  assert.match(JSON.stringify(render(loaded, false).children[1]), /起動時と設定が異なります/);
+});
+
 test('Catalog is beside Resources and opens its own pane in the mounted conversation', async () => {
   const client = await monitorClient({
     createElement: (type, props, ...children) => ({ type, props, children }),
