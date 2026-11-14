@@ -53,7 +53,7 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
   }
   if(path==='/api/workflow-catalog'&&req.method==='GET') {json(res,200,await workflows.catalog({modelProfile:url.searchParams.get('modelProfile')??undefined,mode:url.searchParams.get('mode')??undefined,inputAssetId:url.searchParams.get('inputAssetId'),sessionId:session}));return true;}
   if (path === '/api/workflow-library' && req.method === 'GET') {
-    const filters = url.searchParams, keys = ['id', 'query', 'mode', 'media', 'page', 'limit'];
+    const filters = url.searchParams, keys = ['id', 'query', 'mode', 'media', 'details', 'page', 'limit'];
     if ([...filters.keys()].some(key => !keys.includes(key) || filters.getAll(key).length !== 1)) {
       throw new ApiError(400, 'Invalid workflow library filter');
     }

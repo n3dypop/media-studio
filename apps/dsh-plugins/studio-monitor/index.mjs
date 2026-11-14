@@ -11,7 +11,7 @@ const CATALOG_PATH='/api/local-studio/catalog';
 const CORE_PATH='/api/local-studio/core-model';
 const ROUTES = [
   [MONITOR_PATH, '/api/studio-monitor'],
-  [CATALOG_PATH, '/api/workflow-library', { filters: ['query', 'media', 'mode', 'page'], unavailable: 'ワークフローを取得できません。' }],
+  [CATALOG_PATH, '/api/workflow-library', { filters: ['id', 'query', 'media', 'mode', 'page'], unavailable: 'ワークフローを取得できません。' }],
   [CORE_PATH, '/api/core-catalog', { unavailable: 'Strataのモデル情報を確認できません。' }],
 ];
 const validSession=value=>typeof value==='string'&&value.trim().length>0&&value.length<=160&&!/[\x00-\x1f\x7f]/.test(value);

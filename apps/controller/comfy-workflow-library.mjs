@@ -42,11 +42,38 @@ function validEntry(entry) {
     && (entry.profile === undefined || (bounded(entry.profile, 64) && /^[a-z0-9.-]+$/.test(entry.profile)));
 }
 
-function workflowDetails(graph, nodes, types, models) {
-  const inputs = [...new Set(nodes.filter(node => ['LoadImage', 'LoadImageMask', 'LoadVideo', 'LoadAudio'].includes(node.type)).map(node => node.type))];
-  const outputs = types.filter(type => /^(?:SaveImage|SaveVideo|SaveAudio|VHS_VideoCombine)$/.test(type));
-  const details = { inputs, outputs, nodeTypes: types, models };
-  const main = graph.nodes.filter(node => !node.mode);
+const sourceNodes = new Set(['LoadImage', 'LoadImageMask', 'LoadVideo', 'LoadAudio']);
+const promptNodes = /^(?:CLIPTextEncode.*|TextEncode.*|PrimitiveStringMultiline|MOSSImageLayoutPrompt)$/;
+const diskOutputs = /^(?:SaveImage(?:Advanced)?|SaveVideo|SaveAudio(?:MP3|Opus)?|VHS_VideoCombine)$/;
+const labelOf = node => {
+  const label = node.title?.trim?.();
+  return typeof label === 'string' && /^[\p{L}\p{N} _().<>&·:+/-]{1,80}$/u.test(label) ? label : undefined;
+};
+
+function workflowDetails(graph, nodes, types, models, objects) {
+  const active = nodes.filter(node => node && !node.mode);
+  const inputs = [...new Set(active.filter(node => sourceNodes.has(node.type)).map(node => node.type))];
+  const outputs = types.filter(type => diskOutputs.test(type) && active.some(node => node.type === type));
+  const describe = list => list.slice(0, 12).map(node => {
+    const label = labelOf(node);
+    return { type: node.type, ...(label && { label }) };
+  });
+  const nodeGroups = { bundled: types.filter(type => /^(?:nodes$|comfy_extras\.)/.test(objects[type]?.python_module ?? '')) };
+  const details = { inputs, outputs, nodeTypes: types, models, nodeGroups,
+    sources: describe(active.filter(node => sourceNodes.has(node.type))),
+    promptControls: describe(active.filter(node => promptNodes.test(node.type) && (!node.type.startsWith('Primitive') || /^(?:Request|.*(?:user|positive|negative|edit)[ _]?prompt.*)$/i.test(labelOf(node) ?? '')))),
+    steps: [
+      'Open the saved workflow in ComfyUI and replace sample media in the listed input nodes.',
+      'Set the exposed prompt and operation controls appropriate to the workflow. Check the listed dependency status in ComfyUI.',
+      'When ready to generate, queue the workflow in ComfyUI and inspect the listed output. No job was submitted by this inspection.',
+    ],
+  };
+  const linkedControls = graph.nodes.filter(node => !node.mode && (graph.definitions?.subgraphs ?? []).some(group => group.id === node.type))
+    .flatMap(node => Array.isArray(node.inputs) ? node.inputs : [])
+    .filter(input => typeof input?.name === 'string' && /^[a-zA-Z][\w.]{0,63}$/.test(input.name) && /^(STRING|IMAGE|VIDEO|AUDIO|MASK|INT|FLOAT|BOOLEAN|COMBO)$/.test(input.type));
+  if (linkedControls.length) details.subgraphControls = linkedControls.slice(0, 24)
+    .map(({ name, type, link }) => ({ name, type, linked: Number.isInteger(link) }));
+  const main = graph.nodes.filter(node => node && !node.mode);
   const conditioning = main.find(node => node.type === 'MiniMaxH3ImageConditioning');
   const prompt = main.find(node => node.type === 'PrimitiveStringMultiline' && node.title === 'Text (user_prompt)');
   const enhancer = main.find(node => node.type === 'PrimitiveBoolean' && node.title === 'Boolean (Enable PE?)');
@@ -94,15 +121,15 @@ async function inspectWorkflow(root, entry, objects, resources, detailed) {
   const resourceUsage = await resources(entry, createHash('sha256').update(bytes).digest('hex'));
   return { state: missingModels.length || missingNodes.length ? 'dependencies-missing' : 'static-ready',
     resourceUsage,
-    ...(detailed && { details: workflowDetails(graph, nodes, types.slice(0, 80), entry.models) }),
+    ...(detailed && { details: workflowDetails(graph, nodes, types.slice(0, 80), entry.models, objects) }),
     ...(missingNodes.length && { missingNodes }), ...(missingModels.length && { missingModels }) };
 }
 
-export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, installed, catalog, id, query, mode, media, page = 1, limit = 12 }) {
+export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, installed, catalog, id, query, mode, media, details, page = 1, limit = 12 }) {
   const locator = typeof id === 'string' ? normalize(id) : '';
   if ((id !== undefined && ((!workflowLibraryId.test(locator) && (!bounded(locator, 256) || !workflowLibraryFile.test(locator))) || query !== undefined || page !== 1)) ||
     (query !== undefined && !bounded(query, WORKFLOW_QUERY_LIMIT)) || (mode !== undefined && !/^[a-z0-9-]{1,24}$/.test(mode))
-    || (media !== undefined && !['image', 'video'].includes(media)) || !Number.isSafeInteger(page) || page < 1
+    || (media !== undefined && !['image', 'video'].includes(media)) || (details !== undefined && details !== 'unique') || !Number.isSafeInteger(page) || page < 1
     || !Number.isSafeInteger(limit) || limit < 1 || limit > 25) throw new ApiError(400, 'Invalid workflow library filter');
   const empty = { workflows: [], total: 0, page, limit };
   if (!userDirectory) return { ...empty, state: 'unconfigured' };
@@ -139,7 +166,7 @@ export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, inst
     const { id, family, label, mode, media, file, profile } = entry;
     const dshProfile = managed.find(item => item.modelProfile === profile && item.mode === mode)?.modelProfile;
     return { id, family, label, mode, media, file, ...(dshProfile ? { dshProfile } : profile ? { unavailableDshProfile: profile } : {}),
-      ...await inspectWorkflow(root, entry, objects, resources, Boolean(locator)) };
+      ...await inspectWorkflow(root, entry, objects, resources, Boolean(locator) || (details === 'unique' && entries.length === 1)) };
   }));
   return { ...empty, state: 'configured', operations, total: entries.length, workflows,
     validationScope: 'Static availability in standalone ComfyUI. A dshProfile identifies a managed equivalent. No GPU execution or visual quality was tested.' };

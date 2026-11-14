@@ -183,9 +183,12 @@ Configure a private deployment in this order:
    managed model explicitly in the profile. Keep the bearer out of the profile
    and Desktop launcher; the Controller remains responsible for resource leases
    and ownership checks.
-4. Review basic-compaction budgets against the verified model context window.
-   Its summary route is also `local-strata` / `strata-core`. Keep the compaction
-   and Skill isolation groups intact.
+4. Apply the example's `local-strata` / `strata-core` policy to the native
+   `compaction-basic` entry for general conversations. The Media Studio preset has
+   its own matching policy and summarizes on the local model. With a 32,768-token
+   context and 4,096 output tokens, pressure starts at 20,480 tokens. Keep the
+   compaction and Skill isolation groups intact. For an existing full conversation,
+   use DSH's `/compact` while idle before continuing.
 5. Explicitly enable the outer `preset-local-image` row and its nested
    `local-genai` row, then enable the configured gateway and desired media UI
    entries. Disabled ancestors intentionally keep their children inactive.

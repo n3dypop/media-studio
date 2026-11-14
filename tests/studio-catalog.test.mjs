@@ -183,13 +183,16 @@ test('Catalog is beside Resources and opens its own pane in the mounted conversa
     createElement: (type, props, ...children) => ({ type, props, children }),
     useEffect() {}, useState: value => [value, () => {}],
   });
-  const tabs = [], slots = [], opened = [], draftRequests = [];
+  const tabs = [], slots = [], opened = [], draftRequests = [], presetRequests = [], studioDrafts = [];
   let mounted = 'current', draftResult = 'applied';
   const binding = { id: 'current' };
+  let summary = { blank: false, projectionValues: { agentPreset: 'local-image' } };
   client.apply({
     effect: fn => fn(),
     locale: { register() {}, bind: () => key => key },
-    sessions: { binding: id => { assert.equal(id, binding.id); return binding; } },
+    sessions: { list: { getSnapshot: () => ({ byId: { current: summary } }) }, binding: id => { assert.equal(id, binding.id); return binding; } },
+    remote: { agentPresets: { select: async (id, preset) => { presetRequests.push([id, preset]); return { ok: true, value: preset }; } } },
+    uiWorkspace: { startSession: (_workspace, options) => studioDrafts.push(options) },
     conversation: { input: { requestDraftInitialization: (target, options) => {
       draftRequests.push({ target, ...options });
       return draftResult;
@@ -217,24 +220,37 @@ test('Catalog is beside Resources and opens its own pane in the mounted conversa
 
   const catalog = slots.find(slot => slot.name === 'sidebar.right.pane.tab' && slot.key === 'studio-catalog');
   const { appendPrompt } = catalog.inject('current');
-  assert.equal(appendPrompt('workflow prompt'), true);
+  assert.equal(await appendPrompt('workflow prompt'), true);
   assert.deepEqual(draftRequests[0], { target: binding, prompt: 'workflow prompt', whenDraftExists: 'append' });
   draftResult = 'blocked';
-  assert.equal(appendPrompt('blocked prompt'), false);
+  assert.equal(await appendPrompt('blocked prompt'), false);
   mounted = 'different';
-  assert.equal(appendPrompt('stale prompt'), false);
+  assert.equal(await appendPrompt('stale prompt'), false);
   assert.equal(draftRequests.length, 2);
+  mounted = 'current';
+  draftResult = 'applied';
+  summary = { blank: true, projectionValues: { agentPreset: 'standard' } };
+  assert.equal(await appendPrompt('blank studio draft'), true);
+  assert.deepEqual(presetRequests, [['current', 'local-image']]);
+  assert.equal(draftRequests[2].target, binding);
+  summary = { ...summary, blank: false };
+  assert.equal(catalog.inject('current').startsStudio, true);
+  assert.equal(await appendPrompt('separate studio draft'), true);
+  assert.equal(draftRequests.length, 3);
+  assert.equal(studioDrafts[0].agentPreset, 'local-image');
+  assert.equal(studioDrafts[0].prompt, 'separate studio draft');
 });
 
 test('workflow prompts retain the exact managed profile and hand off standalone workflows', async () => {
   const { workflowPrompt } = await monitorClient();
-  const row = { family: 'MOSS-Image', label: 'Text to image', mode: 't2i', dshProfile: 'moss-image-sft-int8-v1', state: 'static-ready' };
+  const row = { id: 'moss-image-t2i', family: 'MOSS-Image', label: 'Text to image', mode: 't2i', dshProfile: 'moss-image-sft-int8-v1', state: 'static-ready' };
   assert.match(workflowPrompt(row, true), /MOSS-Image \/ Text to image.*moss-image-sft-int8-v1.*t2i/);
+  assert.match(workflowPrompt(row, true), /ワークフローID: moss-image-t2i/);
   assert.match(workflowPrompt({ ...row, state: 'dependencies-missing' }, false), /Check its dependencies and availability/);
   const standalone = { family: 'ControlNet', label: 'Pose', file: 'ControlNet/pose.json' };
   assert.match(workflowPrompt(standalone, true), /ComfyUI単体.*ControlNet\/pose\.json.*実行手順/);
   assert.match(workflowPrompt(standalone, false), /^Explain the required inputs.*standalone ComfyUI/);
   assert.match(workflowPrompt({ ...standalone, id: 'controlnet-pose' }, true), /controlnet-pose.*実行手順/);
   assert.match(workflowPrompt({ ...standalone, id: 'controlnet-pose' }, false), /standalone ComfyUI.*workflow ID: controlnet-pose/);
-  assert.match(workflowPrompt({ ...standalone, unavailableDshProfile: 'sd15-pose-v1', mode: 'pose' }, true), /sd15-pose-v1.*pose.*保守作業/);
+  assert.match(workflowPrompt({ ...standalone, id: 'controlnet-pose', unavailableDshProfile: 'sd15-pose-v1', mode: 'pose' }, true), /controlnet-pose.*保守作業.*sd15-pose-v1.*pose/);
 });

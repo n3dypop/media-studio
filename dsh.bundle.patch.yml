@@ -37,6 +37,10 @@
               - id: media-studio-compaction-basic
                 name: '@deepseek-ai/dsh-compaction-basic'
                 config:
+                  thresholdRatio: 0.625
+                  headroomTokens: 4096
+                  maxTokens: 4096
+                  retainTokens: 1024
                   summarizationProvider: local-strata
                   summarizationModel: strata-core
           - id: media-studio-skills

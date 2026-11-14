@@ -55,7 +55,10 @@ test('ComfyUI library filters and pages templates without promoting them to mana
   assert.equal(byProfile.workflows[0].state, 'static-ready');
   const exact = await comfyWorkflowLibrary({ ...options, id: video.id });
   assert.equal(exact.total, 1);
-  assert.deepEqual(exact.workflows[0].details, { inputs: [], outputs: ['SaveVideo'], nodeTypes: ['UNETLoader', 'SaveVideo'], models: [model] });
+  assert.deepEqual(exact.workflows[0].details.inputs, []);
+  assert.deepEqual(exact.workflows[0].details.outputs, ['SaveVideo']);
+  assert.deepEqual(exact.workflows[0].details.models, [model]);
+  assert.equal(exact.workflows[0].details.steps.length, 3);
   assert.equal(byModel.workflows[0].details, undefined);
   assert.deepEqual((await comfyWorkflowLibrary({ ...options, id: video.file.replaceAll('/', '\\') })).workflows, exact.workflows);
   assert.equal((await comfyWorkflowLibrary({ ...options, query: 'FastH3/t2v.json' })).total, 1);
@@ -112,7 +115,15 @@ test('DSH library tool forwards a video operation as a read-only query', async t
   const byPath = await tool.execute({ id: workflowPath.replaceAll('/', '\\') }, exec);
   assert.equal(byPath.workflows[0].id, 'video');
   assert.equal(seen.at(-1)[3], workflowPath);
-  assert.match(contexts[0].content[0].text, /final answer/);
+  assert.equal(contexts[0].source.summary, 'catalog-answer-ready');
+  events.push({ type: 'user/message', data: contexts[0] });
+  assert.equal(when(exec), false);
+  events.splice(-2, 2, { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text',
+    text: 'ワークフロー「FastH3」（ワークフローID: video）のDSHでの登録・依存状況と、必要な保守作業を教えてください。',
+  }] } });
+  await tool.execute({ id: 'a-different-workflow', query: 'wrong name', page: 3 }, exec);
+  assert.equal(seen.at(-1)[3], 'video');
+  assert.equal(contexts.length, 2);
 });
 
 test('a MiniMax H3 edit lookup reports the saved template inputs and defaults', async t => {

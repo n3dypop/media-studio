@@ -220,14 +220,14 @@ window.__ModuleLoader__.load({
     };
     Object.assign(dictionaries.ja,{
       paneTitle:'Media Studioの右ペイン',open:'会話を開いたとき',placement:'両方開くときの配置',manual:'手動で開く',resources:'Media & Resources',catalog:'Catalog',both:'両方を開く',tabs:'同じペインにタブで表示',resourcesLeft:'左に Media & Resources、右に Catalog',catalogLeft:'左に Catalog、右に Media & Resources',paneHelp:'設定を閉じると、未使用の右ペインに反映します。分割の幅が足りない場合は同じペインに表示します。',paneSaveError:'右ペインの設定を保存できませんでした。',
-      addPrompt:'プロンプトに追加',promptAdded:'入力欄に追加しました。',promptBlocked:'入力欄に追加できません。会話と入力欄の状態を確認してください。',managedUnavailable:'DSHでは利用不可',
+      addPrompt:'プロンプトに追加',openStudio:'Media Studioで開く',promptAdded:'入力欄に追加しました。',promptBlocked:'入力欄に追加できません。会話と入力欄の状態を確認してください。',managedUnavailable:'DSHでは利用不可',
       resourceUse:'予想リソース消費量',modelDisk:'モデルのディスク容量',peakVram:'VRAM増加・観測最大',
       peakRam:'ComfyUIの物理RAM・観測最大',ramBudget:'Strataの常駐RAM設定',unmeasured:'未測定',
       sample:'測定条件',resourceNote:'既定フローでの参考値です。モデル、寸法、同時作業によって変動します。',
     });
     Object.assign(dictionaries.en,{
       paneTitle:'Media Studio right pane',open:'When opening a conversation',placement:'Layout when opening both',manual:'Open manually',resources:'Media & Resources',catalog:'Catalog',both:'Open both',tabs:'Tabs in one pane',resourcesLeft:'Media & Resources left, Catalog right',catalogLeft:'Catalog left, Media & Resources right',paneHelp:'Changes apply to an unused right pane after closing Settings. If there is too little room to split, both open as tabs.',paneSaveError:'Could not save right-pane preferences.',
-      addPrompt:'Add to prompt',promptAdded:'Added to the message draft.',promptBlocked:'Could not add to the draft. Check the conversation and composer.',managedUnavailable:'Unavailable in DSH',
+      addPrompt:'Add to prompt',openStudio:'Open in Media Studio',promptAdded:'Added to the message draft.',promptBlocked:'Could not add to the draft. Check the conversation and composer.',managedUnavailable:'Unavailable in DSH',
       resourceUse:'Expected resource use',modelDisk:'Model files on disk',peakVram:'Largest sampled VRAM increase',
       peakRam:'Peak sampled ComfyUI working set',ramBudget:'Strata resident RAM setting',unmeasured:'Unmeasured',
       sample:'Measurement conditions',resourceNote:'Reference values for the default workflow. Usage varies with models, dimensions and concurrent work.',
@@ -295,23 +295,25 @@ window.__ModuleLoader__.load({
     }
     function workflowPrompt(row,ja){
       const name=[row.family,row.label].filter(Boolean).join(' / ');
+      const title=ja?`「${name}」${row.id?`（ワークフローID: ${row.id}）`:''}`:`“${name}”${row.id?` (workflow ID: ${row.id})`:''}`;
       if(row.dshProfile){
         const check=row.state!=='static-ready';
         return ja
-          ? `ComfyUIワークフロー「${name}」を使いたいです。モデルプロファイルは ${row.dshProfile}、操作は ${row.mode} を指定します。${check?'実行前に依存関係と利用可否を確認してください。':''}`
-          : `Use the ComfyUI workflow “${name}” with model profile ${row.dshProfile} and operation ${row.mode}.${check?' Check its dependencies and availability before running it.':''}`;
+          ? `ComfyUIワークフロー${title}を使いたいです。モデルプロファイルは ${row.dshProfile}、操作は ${row.mode} を指定します。${check?'実行前に依存関係と利用可否を確認してください。':''}`
+          : `Use the ComfyUI workflow ${title} with model profile ${row.dshProfile} and operation ${row.mode}.${check?' Check its dependencies and availability before running it.':''}`;
       }
       if(row.unavailableDshProfile){
         return ja
-          ? `ワークフロー「${name}」をDSHで使いたいです。プロファイル ${row.unavailableDshProfile}、操作 ${row.mode} の登録・依存状況を確認し、必要な保守作業を教えてください。`
-          : `Check why profile ${row.unavailableDshProfile} and operation ${row.mode} are unavailable in DSH for “${name}”, and describe the maintenance needed.`;
+          ? `ワークフロー${title}のDSHでの登録・依存状況と、必要な保守作業を教えてください。対象は ${row.unavailableDshProfile} の ${row.mode} です。`
+          : `Check DSH availability and maintenance needed for ${title}, profile ${row.unavailableDshProfile} and operation ${row.mode}.`;
       }
       return ja
         ? `ComfyUI単体のワークフロー「${name}」（${row.id ? `ワークフローID: ${row.id}` : row.file}）の入力素材・依存関係と実行手順を教えてください。`
         : `Explain the required inputs, dependencies and steps for the standalone ComfyUI workflow “${name}” (${row.id ? `workflow ID: ${row.id}` : row.file}).`;
     }
-    function WorkflowRow({row,t,operation,onSelect}){
+    function WorkflowRow({row,t,operation,onSelect,startsStudio}){
       const [feedback,setFeedback]=useState('');
+      const [pending,setPending]=useState(false);
       const state={'static-ready':'ready','dependencies-missing':'missing'}[row.state]??'invalid';
       const route=row.dshProfile?'managed':row.unavailableDshProfile?'managedUnavailable':'standalone';
       const missing=(label,values)=>values?.length?h('div',null,t(label),h('ul',null,...values.map(value=>h('li',{key:value},value)))):null;
@@ -319,13 +321,17 @@ window.__ModuleLoader__.load({
         h('div',null,row.family&&row.family!==row.label?h('p',{className:'sm-muted'},row.family):null,h('h4',null,row.label)),
         h('div',{className:'msc-badges'},badge(operation(row.mode)),badge(t(route),row.dshProfile?'active':row.unavailableDshProfile?'warning':'idle'),
           badge(t(state),state==='ready'?'success':'warning')),
-        h('div',{className:'msc-action'},h(Button,{type:'button',size:'sm',variant:'outline',onClick:()=>setFeedback(onSelect(row)?'promptAdded':'promptBlocked')},t('addPrompt')),
+        h('div',{className:'msc-action'},h(Button,{type:'button',size:'sm',variant:'outline',disabled:pending,onClick:async()=>{
+          setPending(true);
+          try{setFeedback(await onSelect(row)?(startsStudio?'':'promptAdded'):'promptBlocked');}
+          finally{setPending(false);}
+        }},t(startsStudio?'openStudio':'addPrompt')),
           h('span',{className:'sm-muted',role:'status'},feedback?t(feedback):'')),
         h(WorkflowResources,{data:row.resourceUsage,t}),
         h('details',{className:'sm-history'},h('summary',null,t('details')),h('p',null,row.file),
           row.dshProfile||row.unavailableDshProfile?h('p',null,row.dshProfile??row.unavailableDshProfile):null,missing('models',row.missingModels),missing('nodes',row.missingNodes)));
     }
-    function Catalog({sessionId,useTabInfo,appendPrompt,t=key=>dictionaries.en[key]}){
+    function Catalog({sessionId,useTabInfo,appendPrompt,startsStudio,t=key=>dictionaries.en[key]}){
       const visible=useTabInfo().tab.visible;
       const [draft,setDraft]=useState(''),[query,setQuery]=useState(''),[media,setMedia]=useState(''),[mode,setMode]=useState('');
       const [page,setPage]=useState(1),[revision,setRevision]=useState(0);
@@ -355,7 +361,7 @@ window.__ModuleLoader__.load({
             h('input',{type:'search',value:draft,maxLength:80,placeholder:t('search'),'aria-label':t('search'),onChange:event=>setDraft(event.target.value)}),
             h(Button,{type:'submit',size:'sm',variant:'outline'},t('searchButton'))),
           h('div',{className:'msc-filters'},select('media',media,setMedia,['image','video'],t),select('mode',mode,setMode,mode&&!operations.includes(mode)?[...operations,mode]:operations,operation))),
-          list.value?h('div',null,...list.value.workflows.map(row=>h(WorkflowRow,{key:row.id,row,t,operation,onSelect:item=>appendPrompt(workflowPrompt(item,ja))})),
+          list.value?h('div',null,...list.value.workflows.map(row=>h(WorkflowRow,{key:row.id,row,t,operation,startsStudio,onSelect:item=>appendPrompt(workflowPrompt(item,ja))})),
             list.value.workflows.length===0?h('p',{className:'sm-empty',role:'status'},t(list.value.state==='unconfigured'?'unconfigured':'empty')):null,
             page>1||last>1?h('nav',{className:'msc-line sm-history','aria-label':t('workflows')},button('prev',()=>setPage(n=>n-1),page===1),
               h('span',{className:'sm-muted'},`${page} / ${last}`),button('next',()=>setPage(n=>n+1),page>=last)):null):status(list),
@@ -389,14 +395,33 @@ window.__ModuleLoader__.load({
       ctx.slots.inject('settings.general.item',()=>ctx.slots.register({name:'settings.general.item',id:'studio-monitor-panes',order:15,locale:LOCALE,inject:()=>({onPreferencesChanged:considerAuto})},PaneSettings));
       ctx.effect(()=>ctx.sidebarRightTabs.register({id:CATALOG,kind:CATALOG,title:()=>CATALOG_TITLE,
         guide:[{id:CATALOG,order:21,title:()=>CATALOG_TITLE,description:()=>ctx.locale.bind(LOCALE)('description'),icon:()=>h(Icon,{kind:'layers'})}]}));
+      const summary=id=>ctx.sessions.list.getSnapshot().byId[id];
+      const selectionPending=new WeakMap();
+      const startsStudio=id=>{const item=summary(id);return !item?.blank&&item?.projectionValues?.agentPreset!=='local-image';};
       ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({
-        name:'sidebar.right.pane.tab',key:CATALOG,locale:LOCALE,inject:sessionId=>({sessionId,appendPrompt:prompt=>{
-          if(!mounted(sessionId))return false;
-          try{
-            const binding=ctx.sessions.binding(sessionId);
-            return Boolean(binding&&ctx.conversation.input.requestDraftInitialization(binding,{prompt,whenDraftExists:'append'})==='applied');
-          }catch{return false;}
-        }}),
+        name:'sidebar.right.pane.tab',key:CATALOG,locale:LOCALE,inject:sessionId=>({sessionId,
+          startsStudio:startsStudio(sessionId),appendPrompt:async prompt=>{
+            if(!mounted(sessionId))return false;
+            try{
+              const draft={prompt,whenDraftExists:'append'};
+              if(startsStudio(sessionId)){
+                ctx.uiWorkspace.startSession(undefined,{...draft,agentPreset:'local-image'});
+                return true;
+              }
+              const binding=ctx.sessions.binding(sessionId);
+              if(!binding)return false;
+              if(summary(sessionId)?.projectionValues?.agentPreset!=='local-image'){
+                if(!selectionPending.has(binding)){
+                  const selection=ctx.remote.agentPresets.select(sessionId,'local-image');
+                  selectionPending.set(binding,selection);
+                }
+                const selection=selectionPending.get(binding);
+                try{const result=await selection;if(!result.ok||result.value!=='local-image')return false;}
+                finally{if(selectionPending.get(binding)===selection)selectionPending.delete(binding);}
+              }
+              return mounted(sessionId)&&ctx.sessions.binding(sessionId)===binding&&ctx.conversation.input.requestDraftInitialization(binding,draft)==='applied';
+            }catch{return false;}
+          }}),
       },Catalog));
       // DSH saves tab titles with each layout. Render the current name even in an older layout.
       ctx.slots.inject('sidebar.right.pane.tab.title',()=>ctx.slots.register({
@@ -413,6 +438,6 @@ window.__ModuleLoader__.load({
         return()=>{unsubscribe();window.cancelAnimationFrame(frame);};
       });
     }
-    return {inject:['slots','sidebarRight','sidebarRightTabs','locale','sessions','conversation'],apply,Monitor,PaneButtons,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog,CoreModel,workflowPrompt,PaneSettings,readPanePreferences,autoOpenPanes};
+    return {inject:['slots','sidebarRight','sidebarRightTabs','locale','sessions','conversation','remote.agentPresets','uiWorkspace'],apply,Monitor,PaneButtons,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog,CoreModel,workflowPrompt,PaneSettings,readPanePreferences,autoOpenPanes};
   },
 });

@@ -644,6 +644,8 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     if (current.some(event => event.type === 'turn/end')) return true;
     // This bounds catalog discovery within the current user turn. It does not
     // affect later turns, generation, or other tools.
+    if (current.some(event => event.type === 'user/message' && event.data?.source?.kind === 'local-genai' &&
+      event.data.source.summary === 'catalog-answer-ready')) return false;
     return current.filter(event => event.type === 'tool/call' && event.data?.name === 'local_workflow_library').length < 4;
   };
   register('local_workflow_library', 'Read standalone ComfyUI workflows. Use the exact id for inputs, dependencies and steps available in the saved template. Use a short name only to discover an id. Once found, answer from the returned evidence.', {
@@ -654,33 +656,40 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     page: { type: 'integer', description: 'Result page starting at 1.' },
     includeResources: { type: 'boolean', description: 'Omit for a normal lookup. Set true only for requested disk or memory figures.' },
   }, async (args, exec) => {
-    const workflowId = args.id?.trim().replaceAll('\\', '/');
+    const brief = currentUserRequest(exec.agent.session);
+    const references = [...(brief?.matchAll(/(?:ワークフローID|workflow ID):\s*([a-z0-9-]{1,64})(?![\w-])/gu) ?? [])];
+    const catalogReference = references.length === 1 ? references[0][1] : null;
+    const guideRequest = /(?:^|\n)(?:ComfyUI単体のワークフロー|Explain the required inputs, dependencies and steps for the standalone ComfyUI workflow)/u.test(brief ?? '');
+    const maintenanceRequest = /(?:必要な保守作業を教えてください|(?:^|\n)Check (?:why profile |DSH availability and maintenance needed for ))/u.test(brief ?? '');
+    const draftLookup = catalogReference !== null && (guideRequest || maintenanceRequest);
+    const workflowId = draftLookup ? catalogReference : args.id?.trim().replaceAll('\\', '/');
     const search = args.query?.trim();
-    if (args.id !== undefined && ((!workflowLibraryId.test(workflowId) && (workflowId.length > 256 || !workflowLibraryFile.test(workflowId))) || args.query !== undefined || (args.page ?? 1) !== 1)) {
+    if (!draftLookup && args.id !== undefined && ((!workflowLibraryId.test(workflowId) && (workflowId.length > 256 || !workflowLibraryFile.test(workflowId))) || args.query !== undefined || (args.page ?? 1) !== 1)) {
       return { status: 'invalid_filter', next: 'Use the exact library id or registered catalog path without query or pagination.' };
     }
-    if (args.query !== undefined && (!search || search.length > WORKFLOW_QUERY_LIMIT)) {
+    if (!workflowId && args.query !== undefined && (!search || search.length > WORKFLOW_QUERY_LIMIT)) {
       return { status: 'invalid_filter', next: `Use a workflow id or one short name (up to ${WORKFLOW_QUERY_LIMIT} characters). Request the details by id after finding a match.` };
     }
     const keys = ['media', 'page'];
-    const query = new URLSearchParams(Object.fromEntries(keys.filter(key => args[key] !== undefined).map(key => [key, args[key]])));
+    const query = new URLSearchParams(draftLookup ? {} : Object.fromEntries(keys.filter(key => args[key] !== undefined).map(key => [key, args[key]])));
     if (workflowId) query.set('id',workflowId);
-    if (search) query.set('query',search);
-    if (args.operation !== undefined) {
+    else if (search) { query.set('query',search); query.set('details','unique'); }
+    if (args.operation !== undefined && !draftLookup) {
       if (!/^[a-z0-9-]{1,24}$/.test(args.operation)) return { status: 'invalid_filter', next: 'Use a single operation such as edit or omit the filter.' };
       query.set('mode', args.operation);
     }
     const result = await request('/api/workflow-library?' + query, { sessionId: sessionIdentity(exec), signal: exec.signal });
-    if (workflowId) result.next = result.workflows.length
+    const row = result.workflows.length === 1 ? result.workflows[0] : null;
+    if (workflowId || row?.details) result.next = result.workflows.length
       ? 'Answer now for this workflow only. Explain static status and requested details. Treat resize targets as settings, and listed weights as template dependencies. No further lookup is needed.'
       : 'No matching workflow was found. Check the ID or report that it could not be verified.';
     else if (!result.workflows.length) result.next = 'No matches. If useful, retry once with just the workflow name, then report the gap.';
-    const brief = workflowId && result.workflows.length === 1 ? currentUserRequest(exec.agent.session) : null;
-    const row = result.workflows[0];
-    if (brief && (brief.includes(row.id) || brief.includes(row.file)) &&
-      /^(?:ComfyUI単体のワークフロー「[^」]+」.*実行手順を教えてください。|Explain the required inputs, dependencies and steps for the standalone ComfyUI workflow .+\.)$/u.test(brief)) {
-      exec.deferContext?.({ role: 'user', id: randomUUID(), source: { kind: 'local-genai', form: 'notice' }, content: [{
-        type: 'text', text: 'The requested standalone workflow has been located. Write the final answer in the user’s language from this lookup. Explain the inputs, template dependencies, steps and evidence limits. Do not look up sibling workflows or call any more tools for this request.',
+    else if (search && result.total > 1) result.next = 'Use the chosen workflow ID for details. If the request does not identify one match, ask which workflow to use.';
+    if (brief && (guideRequest || maintenanceRequest) &&
+      (draftLookup || (row && (row.details || (workflowId && (row.id === workflowId || row.file === workflowId))) &&
+        [row.id, row.file].some(value => typeof value === 'string' && brief.includes(value))))) {
+      exec.deferContext?.({ role: 'user', id: randomUUID(), source: { kind: 'local-genai', form: 'notice', summary: 'catalog-answer-ready' }, content: [{
+        type: 'text', text: 'Use the catalog result to answer the selected workflow request now in the user’s language. Explain inputs, dependencies, steps or the maintenance gap as asked. Mark missing facts as unverified. A listed node is not necessarily a custom node. Do not look up sibling workflows, search externally or queue a job for this explanation.',
       }] });
     }
     if (args.includeResources === true) return result;

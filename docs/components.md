@@ -26,7 +26,10 @@ models, output files, credentials or process receipts.
 Select **Catalog** next to **Resources** to open its right-hand pane. The buttons
 are in the conversation header, or above the composer in a new conversation.
 The workflow list supports keyword, media and operation filters.
-**Add to prompt** appends a request to the current draft and keeps its attachments.
+**Add to prompt** appends a request and keeps the current draft's attachments.
+A blank conversation selects the Media Studio preset before inserting the request.
+**Open in Media Studio** prepares a separate draft from an existing conversation
+with another preset. Check the draft and send it when ready.
 Managed workflows insert the exact profile and operation. Standalone entries insert
 the registered workflow ID and a request for local inputs, dependencies and ComfyUI
 instructions. Looking up the ID or a registered workflow path reads the saved template
