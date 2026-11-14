@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { ApiError } from './store.mjs';
 import { workflowResourceReader } from './workflow-resources.mjs';
-import { comboChoices, WORKFLOW_QUERY_LIMIT, workflowLibraryId } from './media-modes.mjs';
+import { comboChoices, WORKFLOW_QUERY_LIMIT, workflowLibraryFile, workflowLibraryId } from './media-modes.mjs';
 
 const loaders = { diffusion_models: ['UNETLoader', 'unet_name'], text_encoders: ['CLIPLoader', 'clip_name'],
   vae: ['VAELoader', 'vae_name'], loras: ['LoraLoaderModelOnly', 'lora_name'], geometry_estimation: ['LoadMoGeModel', 'model_name'],
@@ -11,7 +11,6 @@ const loaders = { diffusion_models: ['UNETLoader', 'unet_name'], text_encoders: 
   controlnet: ['ControlNetLoader','control_net_name'] };
 const nodeName = /^[A-Za-z][A-Za-z0-9_]{0,99}$/;
 const modelName = /^(?:[\w.-]+\/)*[\w.-]+\.(?:safetensors|pth|gguf)$/i;
-const workflowFile = /^Media Studio\/[A-Za-z0-9][\w .-]*\/[\w-]+\.json$/;
 const bounded = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
 const normalize = value => String(value).replaceAll('\\', '/');
 const registeredNode = (objects, name) => Object.hasOwn(objects, name) && objects[name]?.api_node !== true && objects[name]?.dev_only !== true;
@@ -36,7 +35,7 @@ function modelAvailable(objects, { category, name }) {
 
 function validEntry(entry) {
   return typeof entry?.id === 'string' && workflowLibraryId.test(entry.id) && bounded(entry.family, 80) && bounded(entry.label, 100)
-    && bounded(entry.mode, 24) && /^[a-z0-9-]+$/.test(entry.mode) && typeof entry.file === 'string' && workflowFile.test(entry.file)
+    && bounded(entry.mode, 24) && /^[a-z0-9-]+$/.test(entry.mode) && typeof entry.file === 'string' && workflowLibraryFile.test(entry.file)
     && ['image', 'video'].includes(entry.media) && Array.isArray(entry.models) && entry.models.length <= 20
     && entry.models.every(model => model && Object.hasOwn(loaders, model.category)
       && bounded(model.name, 240) && modelName.test(model.name) && !model.name.split('/').some(part => part === '.' || part === '..'))
@@ -59,7 +58,9 @@ function workflowDetails(graph, nodes, types, models) {
     ];
     if (typeof enhancer?.widgets_values?.[0] === 'boolean') details.promptEnhancerEnabled = enhancer.widgets_values[0];
     const resize = main.find(node => node.type === 'ResizeImageMaskNode' && node.widgets_values?.[0] === 'scale total pixels');
-    if (Number.isFinite(resize?.widgets_values?.[1])) details.inputMegapixels = resize.widgets_values[1];
+    const multiple = main.find(node => node.type === 'ResizeImageMaskNode' && node.widgets_values?.[0] === 'scale to multiple');
+    if (Number.isFinite(resize?.widgets_values?.[1])) details.resizeTargetMegapixels = resize.widgets_values[1];
+    if (Number.isFinite(multiple?.widgets_values?.[1])) details.resizeMultiple = multiple.widgets_values[1];
     const widgets = main.find(node => node.type === 'KSampler')?.widgets_values;
     const [, , steps, cfg, sampler, scheduler, denoise] = Array.isArray(widgets) ? widgets : [];
     if ([steps, cfg, denoise].every(Number.isFinite) && [sampler, scheduler].every(value => typeof value === 'string' && nodeName.test(value))) {
@@ -98,7 +99,8 @@ async function inspectWorkflow(root, entry, objects, resources, detailed) {
 }
 
 export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, installed, catalog, id, query, mode, media, page = 1, limit = 12 }) {
-  if ((id !== undefined && (typeof id !== 'string' || !workflowLibraryId.test(id) || query !== undefined || page !== 1)) ||
+  const locator = typeof id === 'string' ? normalize(id) : '';
+  if ((id !== undefined && ((!workflowLibraryId.test(locator) && (!bounded(locator, 256) || !workflowLibraryFile.test(locator))) || query !== undefined || page !== 1)) ||
     (query !== undefined && !bounded(query, WORKFLOW_QUERY_LIMIT)) || (mode !== undefined && !/^[a-z0-9-]{1,24}$/.test(mode))
     || (media !== undefined && !['image', 'video'].includes(media)) || !Number.isSafeInteger(page) || page < 1
     || !Number.isSafeInteger(limit) || limit < 1 || limit > 25) throw new ApiError(400, 'Invalid workflow library filter');
@@ -125,7 +127,7 @@ export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, inst
   const operations = [...new Set(index.workflows.map(entry => entry.mode))].sort();
   const entries = index.workflows.filter(entry => {
     const text = searchable([entry.id, entry.family, entry.label, entry.file, entry.mode, entry.profile, ...entry.models.map(model => model.name)].join(' '));
-    return (!id || entry.id === id) && (!mode || mode === entry.mode) && (!media || media === entry.media) && terms.every(term => text.includes(term));
+    return (!locator || entry.id === locator || entry.file === locator) && (!mode || mode === entry.mode) && (!media || media === entry.media) && terms.every(term => text.includes(term));
   }).sort((a, b) => a.family.localeCompare(b.family) || a.id.localeCompare(b.id));
   const selected = entries.slice((page - 1) * limit, page * limit);
   if (!selected.length) return { ...empty, state: 'configured', operations, total: entries.length };
@@ -137,7 +139,7 @@ export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, inst
     const { id, family, label, mode, media, file, profile } = entry;
     const dshProfile = managed.find(item => item.modelProfile === profile && item.mode === mode)?.modelProfile;
     return { id, family, label, mode, media, file, ...(dshProfile ? { dshProfile } : profile ? { unavailableDshProfile: profile } : {}),
-      ...await inspectWorkflow(root, entry, objects, resources, id !== undefined) };
+      ...await inspectWorkflow(root, entry, objects, resources, Boolean(locator)) };
   }));
   return { ...empty, state: 'configured', operations, total: entries.length, workflows,
     validationScope: 'Static availability in standalone ComfyUI. A dshProfile identifies a managed equivalent. No GPU execution or visual quality was tested.' };

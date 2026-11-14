@@ -29,7 +29,8 @@ The workflow list supports keyword, media and operation filters.
 **Add to prompt** appends a request to the current draft and keeps its attachments.
 Managed workflows insert the exact profile and operation. Standalone entries insert
 the registered workflow ID and a request for local inputs, dependencies and ComfyUI
-instructions. Looking up the ID inspects the saved template without queuing a job.
+instructions. Looking up the ID or a registered workflow path reads the saved template
+without queuing a job. This also supports drafts made before the ID was included.
 Unavailable DSH mappings insert a maintenance request. Send the draft when it is ready.
 The Strata section shows the model specified in startup settings and the model
 currently loaded by Strata. An active server can show **Not loaded**. The settings

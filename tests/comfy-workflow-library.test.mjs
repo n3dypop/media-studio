@@ -56,6 +56,8 @@ test('ComfyUI library filters and pages templates without promoting them to mana
   const exact = await comfyWorkflowLibrary({ ...options, id: video.id });
   assert.equal(exact.total, 1);
   assert.deepEqual(exact.workflows[0].details, { inputs: [], outputs: ['SaveVideo'], nodeTypes: ['UNETLoader', 'SaveVideo'], models: [model] });
+  assert.equal(byModel.workflows[0].details, undefined);
+  assert.deepEqual((await comfyWorkflowLibrary({ ...options, id: video.file.replaceAll('/', '\\') })).workflows, exact.workflows);
   assert.equal((await comfyWorkflowLibrary({ ...options, query: 'FastH3/t2v.json' })).total, 1);
   await assert.rejects(comfyWorkflowLibrary({ ...options, id: '../t2v' }), { status: 400 });
   await assert.rejects(comfyWorkflowLibrary({ ...options, limit: 26 }), { status: 400 });
@@ -100,6 +102,17 @@ test('DSH library tool forwards a video operation as a read-only query', async t
   assert.equal(when(exec), false);
   events.push({ type: 'turn/end' }, { type: 'turn/start' });
   assert.equal(when(exec), true);
+  const workflowPath = 'Media Studio/FastH3/t2v.json';
+  events.push({ type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text',
+    text: `ComfyUI単体のワークフロー「FastH3」（${workflowPath}）の入力素材・依存関係と実行手順を教えてください。`,
+  }] } });
+  const contexts = [];
+  exec.deferContext = context => contexts.push(context);
+  response.workflows[0].file = workflowPath;
+  const byPath = await tool.execute({ id: workflowPath.replaceAll('/', '\\') }, exec);
+  assert.equal(byPath.workflows[0].id, 'video');
+  assert.equal(seen.at(-1)[3], workflowPath);
+  assert.match(contexts[0].content[0].text, /final answer/);
 });
 
 test('a MiniMax H3 edit lookup reports the saved template inputs and defaults', async t => {
@@ -116,6 +129,7 @@ test('a MiniMax H3 edit lookup reports the saved template inputs and defaults', 
     { type: 'PrimitiveBoolean', title: 'Boolean (Enable PE?)', widgets_values: [false] },
     { type: 'MiniMaxH3ImageConditioning' },
     { type: 'ResizeImageMaskNode', widgets_values: ['scale total pixels', 4] },
+    { type: 'ResizeImageMaskNode', widgets_values: ['scale to multiple', 32] },
     { type: 'KSampler', widgets_values: [0, 'fixed', 6, 1, 'euler', 'simple', 1] },
     { type: 'SaveImage' },
   ];
@@ -128,7 +142,8 @@ test('a MiniMax H3 edit lookup reports the saved template inputs and defaults', 
   assert.deepEqual(row.details.inputs, ['LoadImage']);
   assert.deepEqual(row.details.outputs, ['SaveImage']);
   assert.equal(row.details.promptEnhancerEnabled, false);
-  assert.equal(row.details.inputMegapixels, 4);
+  assert.equal(row.details.resizeTargetMegapixels, 4);
+  assert.equal(row.details.resizeMultiple, 32);
   assert.deepEqual(row.details.sampler, { steps: 6, cfg: 1, sampler: 'euler', scheduler: 'simple', denoise: 1 });
   assert.match(row.details.steps[1], /user_prompt/);
   assert.doesNotMatch(JSON.stringify(row), /Example prompt/);

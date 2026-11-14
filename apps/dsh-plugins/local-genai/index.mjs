@@ -1,6 +1,6 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, relative, isAbsolute } from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { loadDshBindings, loadDshScopeBindings, loadDshNativeExecutor, desktopPackagedRuntimeOption, withDesktopPackagedRuntime } from './runtime.mjs';
 import { selectNativeToolMode } from './native-tool-mode.mjs';
 import { agentRole, guideForRole } from './roles.mjs';
@@ -12,7 +12,7 @@ import {deliveryPosition, singleVisibleImageDelivery, visibleDelivery} from './e
 import {createRuntimeConfig,runtimeRootOf} from '../shared/plugin-config.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
 import {createDurableRuntime} from './durable-runtime.mjs';
-import { MOSS_OFFICIAL_IDS, QWEN21_OFFICIAL_IDS, WORKFLOW_QUERY_LIMIT, workflowLibraryId, MODEL_PROFILES as KNOWN_PROFILES,
+import { MOSS_OFFICIAL_IDS, QWEN21_OFFICIAL_IDS, WORKFLOW_QUERY_LIMIT, workflowLibraryFile, workflowLibraryId, MODEL_PROFILES as KNOWN_PROFILES,
   activeModelProfiles as MODEL_PROFILES, MEDIA_MODES as MODES } from '../../controller/media-modes.mjs';
 
 export const name = 'local-genai';
@@ -647,17 +647,17 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     return current.filter(event => event.type === 'tool/call' && event.data?.name === 'local_workflow_library').length < 4;
   };
   register('local_workflow_library', 'Read standalone ComfyUI workflows. Use the exact id for inputs, dependencies and steps available in the saved template. Use a short name only to discover an id. Once found, answer from the returned evidence.', {
-    id: { type: 'string', description: 'Exact workflow library ID. Use instead of query for details.' },
+    id: { type: 'string', description: 'Exact workflow library ID or saved catalog path shown in the user request. Use instead of query for details.' },
     query: { type: 'string', description: `Name or filename only, at most ${WORKFLOW_QUERY_LIMIT} characters. Do not add instructions or dependency terms.` },
     operation: { type: 'string', description: 'Template operation such as t2i, edit, t2v or i2v.' },
     media: { type: 'string', enum: ['image', 'video'] },
     page: { type: 'integer', description: 'Result page starting at 1.' },
     includeResources: { type: 'boolean', description: 'Omit for a normal lookup. Set true only for requested disk or memory figures.' },
   }, async (args, exec) => {
-    const workflowId = args.id?.trim();
+    const workflowId = args.id?.trim().replaceAll('\\', '/');
     const search = args.query?.trim();
-    if (args.id !== undefined && (!workflowLibraryId.test(workflowId) || args.query !== undefined || (args.page ?? 1) !== 1)) {
-      return { status: 'invalid_filter', next: 'Use only the exact library id for details, without query or pagination.' };
+    if (args.id !== undefined && ((!workflowLibraryId.test(workflowId) && (workflowId.length > 256 || !workflowLibraryFile.test(workflowId))) || args.query !== undefined || (args.page ?? 1) !== 1)) {
+      return { status: 'invalid_filter', next: 'Use the exact library id or registered catalog path without query or pagination.' };
     }
     if (args.query !== undefined && (!search || search.length > WORKFLOW_QUERY_LIMIT)) {
       return { status: 'invalid_filter', next: `Use a workflow id or one short name (up to ${WORKFLOW_QUERY_LIMIT} characters). Request the details by id after finding a match.` };
@@ -672,9 +672,17 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     }
     const result = await request('/api/workflow-library?' + query, { sessionId: sessionIdentity(exec), signal: exec.signal });
     if (workflowId) result.next = result.workflows.length
-      ? 'Use these details to answer now. Report unavailable facts as unverified. Do not repeat this lookup or execute a workflow for an explanation request.'
-      : 'No matching workflow ID was found. Check the ID or report that it could not be verified.';
+      ? 'Answer now for this workflow only. Explain static status and requested details. Treat resize targets as settings, and listed weights as template dependencies. No further lookup is needed.'
+      : 'No matching workflow was found. Check the ID or report that it could not be verified.';
     else if (!result.workflows.length) result.next = 'No matches. If useful, retry once with just the workflow name, then report the gap.';
+    const brief = workflowId && result.workflows.length === 1 ? currentUserRequest(exec.agent.session) : null;
+    const row = result.workflows[0];
+    if (brief && (brief.includes(row.id) || brief.includes(row.file)) &&
+      /^(?:ComfyUI単体のワークフロー「[^」]+」.*実行手順を教えてください。|Explain the required inputs, dependencies and steps for the standalone ComfyUI workflow .+\.)$/u.test(brief)) {
+      exec.deferContext?.({ role: 'user', id: randomUUID(), source: { kind: 'local-genai', form: 'notice' }, content: [{
+        type: 'text', text: 'The requested standalone workflow has been located. Write the final answer in the user’s language from this lookup. Explain the inputs, template dependencies, steps and evidence limits. Do not look up sibling workflows or call any more tools for this request.',
+      }] });
+    }
     if (args.includeResources === true) return result;
     const { operations, workflows, ...page } = result;
     return { ...page, workflows: workflows.map(({ resourceUsage, ...row }) => row) };
