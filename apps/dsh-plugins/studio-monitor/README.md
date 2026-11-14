@@ -8,6 +8,15 @@ with dependency checks and any available DSH mapping. DSH's
 official sidebar provides resizing, tabs, focus and narrow-screen layout; the
 plugin does not patch the Host DOM or overwrite another tab's width preference.
 
+In Web and Desktop, **Settings → General → Media Studio right pane** controls
+what opens when visiting a conversation. Choose manual, either tab,
+or both. When both open, choose one tab strip or either left/right order.
+DSH applies its normal split width rule and uses one pane if a split does not
+fit. Auto-open is limited to wide screens and a collapsed guide so saved tabs
+and the user's existing layout stay in place. Preferences are stored per client.
+Manual is the default. An explicitly enabled older Resources preference is kept
+until a new preference is saved.
+
 The pane shows conversation-owned productions, current stages, elapsed time,
 attempt/review counts, Strata and ComfyUI resource observations, and the managed
 GPU lease owner. Standard DSH buttons and theme tokens keep it consistent with

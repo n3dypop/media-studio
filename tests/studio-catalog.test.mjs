@@ -65,12 +65,45 @@ test('catalog forwarding is read-only and checks an existing conversation', asyn
   assert.deepEqual(calls, [['mine', ['media', 'video'], ['page', '2']]]);
 });
 
-async function monitorClient(react = {}) {
+async function monitorClient(react = {}, options = {}) {
   let entry;
   const source = await readFile(new URL('../apps/dsh-plugins/studio-monitor/client.js', import.meta.url), 'utf8');
-  runInNewContext(source, { window: { __ModuleLoader__: { load: value => { entry = value; } } } });
+  runInNewContext(source, { window: { ...options, __ModuleLoader__: { load: value => { entry = value; } } } });
   return entry.factory(id => id === 'react' ? react : { Button() {} });
 }
+
+test('right-pane settings default to manual and preserve an explicit legacy choice', async () => {
+  const values = new Map();
+  const client = await monitorClient({}, {localStorage:{getItem:key=>values.get(key)??null}});
+  assert.equal(client.readPanePreferences().open,'manual');
+  values.set('studio-monitor.auto-open.v1','true');
+  assert.equal(client.readPanePreferences().open,'resources');
+  values.set('studio-monitor.pane-preferences.v1',JSON.stringify({open:'both',placement:'catalogLeft'}));
+  assert.equal(client.readPanePreferences().open,'both');
+  assert.equal(client.readPanePreferences().placement,'catalogLeft');
+  values.set('studio-monitor.pane-preferences.v1','invalid');
+  assert.equal(client.readPanePreferences().open,'manual');
+});
+
+test('auto-open only uses a collapsed guide and prefers DSH horizontal placement for the second tab', async () => {
+  const {autoOpenPanes}=await monitorClient(),opened=[];
+  let expanded=false,active={kind:'guide',id:'guide'};
+  const sidebar={isExpanded:()=>expanded,active:()=>active,openTab:(kind,options)=>opened.push({kind,...options})};
+  autoOpenPanes(sidebar,{open:'manual',placement:'tabs'},true);
+  autoOpenPanes(sidebar,{open:'both',placement:'catalogLeft'},false);
+  expanded=true;autoOpenPanes(sidebar,{open:'both',placement:'catalogLeft'},true);
+  expanded=false;active={kind:'files',id:'file'};autoOpenPanes(sidebar,{open:'both',placement:'catalogLeft'},true);
+  assert.deepEqual(opened,[]);
+  active={kind:'guide',id:'guide'};
+  autoOpenPanes(sidebar,{open:'both',placement:'catalogLeft'},true);
+  assert.deepEqual(opened.splice(0),[{kind:'studio-catalog',replaceTab:'guide'},{kind:'studio-monitor',preferNewPane:true}]);
+  autoOpenPanes(sidebar,{open:'both',placement:'resourcesLeft'},true);
+  assert.deepEqual(opened.splice(0),[{kind:'studio-monitor',replaceTab:'guide'},{kind:'studio-catalog',preferNewPane:true}]);
+  autoOpenPanes(sidebar,{open:'both',placement:'tabs'},true);
+  assert.deepEqual(opened.splice(0),[{kind:'studio-monitor',replaceTab:'guide'},{kind:'studio-catalog',preferNewPane:false}]);
+  autoOpenPanes(sidebar,{open:'catalog',placement:'tabs'},true);
+  assert.deepEqual(opened,[{kind:'studio-catalog',replaceTab:'guide'}]);
+});
 
 test('Strata model cards distinguish configured, loaded, unloaded and unverified states', async () => {
   const { CoreModel, apply } = await monitorClient({

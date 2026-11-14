@@ -4,13 +4,16 @@ window.__ModuleLoader__.load({
   factory(require){
     const {createElement:h,useEffect,useState}=require('react');
     const {Button}=require('@deepseek-ai/dsh-client-ui-primitives');
-    const ID='local-studio-monitor',KIND='studio-monitor',AUTO_KEY='studio-monitor.auto-open.v1';
+    const ID='local-studio-monitor',KIND='studio-monitor',CATALOG='studio-catalog',LOCALE='studio.catalog',CATALOG_TITLE='Catalog';
+    const AUTO_KEY='studio-monitor.auto-open.v1',PANE_KEY='studio-monitor.pane-preferences.v1';
+    const openModes=['manual','resources','catalog','both'];
+    const placements=['tabs','resourcesLeft','catalogLeft'];
     const phase={planning:'制作条件を整理',ready:'フロー準備済み',generating:'生成中',awaiting_evaluation:'レビュー待ち',revising:'改善を計画',needs_user:'利用者の確認待ち',completed:'完了',failed:'失敗',cancelled:'停止済み',cancelling:'停止処理中',queued:'キュー待機',preparing:'実行準備',draining_core:'Strataを解放中',enhancing:'プロンプト調整',submitting:'ComfyUIへ送信',submission_unknown:'送信結果を確認中',saving:'成果物を保存中',releasing:'生成資源を解放中',restoring_core:'Strataへ復帰中',recovery_required:'復旧の確認が必要',needs_attention:'確認が必要'};
     const owner={core:'Strata',generator:'ComfyUI',enhancer:'エンハンサー',none:'割当なし',unknown:'確認できません',draining_core:'Strataから切替中',loading_core:'Strataを読込中',restoring_core:'Strataへ復帰中'};
     const css=`
       body[data-studio-wallpaper][data-studio-wallpaper-scope='window'] .studio-monitor{--sm-surface:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 84%,transparent)}
       .studio-monitor{--sm-accent:var(--dsw-alias-state-business-primary,var(--dsw-alias-link));--sm-muted:var(--dsw-alias-label-secondary);--sm-border:var(--dsw-alias-border-l1);--sm-surface:var(--dsw-alias-bg-layer-1);font-family:var(--dsh-font-family-text,inherit);color:var(--dsw-alias-label-primary);padding:16px;box-sizing:border-box;font-size:13px;line-height:1.55;min-width:0;overflow:auto;height:100%;scrollbar-gutter:stable}
-      .studio-monitor *{box-sizing:border-box}.studio-monitor h2,.studio-monitor h3,.studio-monitor p{margin:0}.studio-monitor h2{font-size:18px;letter-spacing:-.02em}.studio-monitor h3{font-size:14px}.studio-monitor small{font-size:11px}.sm-heading,.sm-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.sm-heading{margin-bottom:16px}.sm-eyebrow{font-size:10px;letter-spacing:.12em;color:var(--sm-muted);font-weight:600}.sm-muted{color:var(--sm-muted);font-size:11px}.sm-card{border:1px solid var(--sm-border);border-radius:16px;padding:16px;margin-bottom:12px;background:var(--sm-surface);box-shadow:0 2px 10px color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent)}.sm-card-title{margin-bottom:14px!important}.sm-badge{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--sm-border);border-radius:999px;padding:3px 8px;white-space:nowrap;font-size:10px;line-height:1.4;color:var(--sm-muted);background:var(--dsw-alias-bg-layer-2)}.sm-badge[data-tone=active]{color:var(--sm-accent);border-color:color-mix(in srgb,var(--sm-accent) 32%,transparent);background:color-mix(in srgb,var(--sm-accent) 10%,var(--sm-surface))}.sm-badge[data-tone=success]{color:var(--dsw-alias-state-success-primary)}.sm-badge[data-tone=warning]{color:var(--dsw-alias-state-warn-primary)}.sm-badge[data-tone=error]{color:var(--dsw-alias-state-error-primary)}.sm-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}.sm-service+.sm-service{margin-top:16px;border-top:1px solid var(--sm-border);padding-top:16px}.sm-service-name{display:flex;align-items:center;gap:9px;font-weight:650}.sm-icon{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:1px solid var(--sm-border);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--sm-accent)}.sm-statgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.sm-stat{padding:9px 11px;border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.sm-stat-label{font-size:10px;color:var(--sm-muted)}.sm-stat-value{font-size:14px;font-variant-numeric:tabular-nums;font-weight:600;margin-top:2px;overflow-wrap:anywhere}.sm-divider{height:1px;background:var(--sm-border);margin:16px 0}.sm-ownergrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:9px}.sm-owner{padding:10px;border-radius:11px;border:1px solid var(--sm-border);color:var(--sm-muted)}.sm-owner[data-active=true]{border-color:color-mix(in srgb,var(--sm-accent) 60%,var(--sm-border));color:var(--dsw-alias-label-primary);background:color-mix(in srgb,var(--sm-accent) 10%,var(--sm-surface))}.sm-owner strong{font-size:12px;display:block}.sm-meter{height:5px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden;margin-top:7px}.sm-meter-fill{height:100%;border-radius:999px;background:var(--sm-accent);transition:width .25s ease}.sm-meter[data-tone=warning] .sm-meter-fill{background:var(--dsw-alias-state-warn-primary)}.sm-meter[data-tone=error] .sm-meter-fill{background:var(--dsw-alias-state-error-primary)}.sm-usage+.sm-usage{margin-top:12px}.sm-numeric{font-variant-numeric:tabular-nums}.sm-joblist{list-style:none;padding:0;margin:0}.sm-job{border:1px solid var(--sm-border);border-radius:12px;padding:13px;margin-top:10px}.sm-job[data-active=true]{border-color:color-mix(in srgb,var(--sm-accent) 35%,var(--sm-border))}.sm-job-model{margin-top:7px!important;overflow-wrap:anywhere}.sm-job-label{font-size:12px;font-weight:650}.sm-stage-list{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:7px}.sm-stage{display:flex;align-items:center;gap:9px;font-size:11px;color:var(--sm-muted)}.sm-stage-marker{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--sm-border);border-radius:50%;width:17px;height:17px;font-size:10px;flex-shrink:0}.sm-stage[data-state=done] .sm-stage-marker{color:var(--dsw-alias-state-success-primary);border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 35%,var(--sm-border))}.sm-stage[data-state=current]{color:var(--sm-accent);font-weight:600}.sm-stage[data-state=current] .sm-stage-marker{background:color-mix(in srgb,var(--sm-accent) 14%,transparent);border-color:var(--sm-accent)}.sm-node{margin-top:13px;padding-top:11px;border-top:1px solid var(--sm-border)}.sm-empty{padding:16px 4px;text-align:center;color:var(--sm-muted)}.sm-empty svg{margin-bottom:7px}.sm-notice{border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 35%,var(--sm-border));background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--sm-surface));border-radius:10px;padding:10px 12px;margin-bottom:12px;color:var(--dsw-alias-label-primary);font-size:12px}.sm-settings{display:flex;align-items:center;gap:7px;color:var(--sm-muted);font-size:11px;margin:12px 0}.sm-settings input{accent-color:var(--sm-accent)}.sm-footnote{font-size:10px;color:var(--sm-muted);margin-top:9px!important}.sm-history{margin-top:12px}.sm-history summary{cursor:pointer;color:var(--sm-muted);font-size:11px;padding:6px 0}.sm-header-button{display:inline-flex;gap:6px;align-items:center}@media(max-width:400px){.studio-monitor{padding:10px}.sm-card{padding:12px}.sm-heading{flex-wrap:wrap}.sm-stat-value{font-size:12px}}@media(prefers-reduced-motion:reduce){.studio-monitor *{transition:none!important}}
+      .studio-monitor *{box-sizing:border-box}.studio-monitor h2,.studio-monitor h3,.studio-monitor p{margin:0}.studio-monitor h2{font-size:18px;letter-spacing:-.02em}.studio-monitor h3{font-size:14px}.studio-monitor small{font-size:11px}.sm-heading,.sm-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.sm-heading{margin-bottom:16px}.sm-eyebrow{font-size:10px;letter-spacing:.12em;color:var(--sm-muted);font-weight:600}.sm-muted{color:var(--sm-muted);font-size:11px}.sm-card{border:1px solid var(--sm-border);border-radius:16px;padding:16px;margin-bottom:12px;background:var(--sm-surface);box-shadow:0 2px 10px color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent)}.sm-card-title{margin-bottom:14px!important}.sm-badge{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--sm-border);border-radius:999px;padding:3px 8px;white-space:nowrap;font-size:10px;line-height:1.4;color:var(--sm-muted);background:var(--dsw-alias-bg-layer-2)}.sm-badge[data-tone=active]{color:var(--sm-accent);border-color:color-mix(in srgb,var(--sm-accent) 32%,transparent);background:color-mix(in srgb,var(--sm-accent) 10%,var(--sm-surface))}.sm-badge[data-tone=success]{color:var(--dsw-alias-state-success-primary)}.sm-badge[data-tone=warning]{color:var(--dsw-alias-state-warn-primary)}.sm-badge[data-tone=error]{color:var(--dsw-alias-state-error-primary)}.sm-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}.sm-service+.sm-service{margin-top:16px;border-top:1px solid var(--sm-border);padding-top:16px}.sm-service-name{display:flex;align-items:center;gap:9px;font-weight:650}.sm-icon{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:1px solid var(--sm-border);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--sm-accent)}.sm-statgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.sm-stat{padding:9px 11px;border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.sm-stat-label{font-size:10px;color:var(--sm-muted)}.sm-stat-value{font-size:14px;font-variant-numeric:tabular-nums;font-weight:600;margin-top:2px;overflow-wrap:anywhere}.sm-divider{height:1px;background:var(--sm-border);margin:16px 0}.sm-ownergrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:9px}.sm-owner{padding:10px;border-radius:11px;border:1px solid var(--sm-border);color:var(--sm-muted)}.sm-owner[data-active=true]{border-color:color-mix(in srgb,var(--sm-accent) 60%,var(--sm-border));color:var(--dsw-alias-label-primary);background:color-mix(in srgb,var(--sm-accent) 10%,var(--sm-surface))}.sm-owner strong{font-size:12px;display:block}.sm-meter{height:5px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden;margin-top:7px}.sm-meter-fill{height:100%;border-radius:999px;background:var(--sm-accent);transition:width .25s ease}.sm-meter[data-tone=warning] .sm-meter-fill{background:var(--dsw-alias-state-warn-primary)}.sm-meter[data-tone=error] .sm-meter-fill{background:var(--dsw-alias-state-error-primary)}.sm-usage+.sm-usage{margin-top:12px}.sm-numeric{font-variant-numeric:tabular-nums}.sm-joblist{list-style:none;padding:0;margin:0}.sm-job{border:1px solid var(--sm-border);border-radius:12px;padding:13px;margin-top:10px}.sm-job[data-active=true]{border-color:color-mix(in srgb,var(--sm-accent) 35%,var(--sm-border))}.sm-job-model{margin-top:7px!important;overflow-wrap:anywhere}.sm-job-label{font-size:12px;font-weight:650}.sm-stage-list{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:7px}.sm-stage{display:flex;align-items:center;gap:9px;font-size:11px;color:var(--sm-muted)}.sm-stage-marker{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--sm-border);border-radius:50%;width:17px;height:17px;font-size:10px;flex-shrink:0}.sm-stage[data-state=done] .sm-stage-marker{color:var(--dsw-alias-state-success-primary);border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 35%,var(--sm-border))}.sm-stage[data-state=current]{color:var(--sm-accent);font-weight:600}.sm-stage[data-state=current] .sm-stage-marker{background:color-mix(in srgb,var(--sm-accent) 14%,transparent);border-color:var(--sm-accent)}.sm-node{margin-top:13px;padding-top:11px;border-top:1px solid var(--sm-border)}.sm-empty{padding:16px 4px;text-align:center;color:var(--sm-muted)}.sm-empty svg{margin-bottom:7px}.sm-notice{border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 35%,var(--sm-border));background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--sm-surface));border-radius:10px;padding:10px 12px;margin-bottom:12px;color:var(--dsw-alias-label-primary);font-size:12px}.sm-footnote{font-size:10px;color:var(--sm-muted);margin-top:9px!important}.sm-history{margin-top:12px}.sm-history summary{cursor:pointer;color:var(--sm-muted);font-size:11px;padding:6px 0}.sm-header-button{display:inline-flex;gap:6px;align-items:center}@media(max-width:400px){.studio-monitor{padding:10px}.sm-card{padding:12px}.sm-heading{flex-wrap:wrap}.sm-stat-value{font-size:12px}}@media(prefers-reduced-motion:reduce){.studio-monitor *{transition:none!important}}
       .studio-monitor{container-type:inline-size}.sm-resource-card{padding:14px}.sm-resource-card .sm-card-title{margin-bottom:12px!important}.sm-services{display:grid;gap:12px}.sm-services>.sm-service{min-width:0}.sm-services>.sm-service+.sm-service{margin-top:0;padding-top:12px}.sm-resource-card .sm-icon{width:26px;height:26px;border-radius:8px}.sm-resource-card .sm-statgrid{gap:8px;margin-top:8px}.sm-resource-card .sm-stat{padding:8px 10px}.sm-resource-card .sm-divider{margin:11px 0}.sm-system-grid{display:grid;gap:10px;margin-top:9px}.sm-system-grid>.sm-usage{margin-top:0}.sm-system-grid .sm-numeric{font-size:11px}.sm-resource-card .sm-ownergrid{margin-top:8px;gap:8px}.sm-resource-card .sm-owner{padding:7px 9px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:3px 7px}.sm-resource-card .sm-owner strong{font-size:11px}.sm-resource-card .sm-owner small{font-size:10px}.sm-resource-card .sm-history{margin-top:10px}.sm-scope-service+.sm-scope-service{margin-top:8px}.sm-scope-service strong{font-size:11px}.sm-resource-card .sm-scope-service .sm-footnote{margin-top:3px!important}
       @container (min-width:460px){.sm-services{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.sm-services>.sm-service+.sm-service{padding-top:0;border-top:0;border-left:1px solid var(--sm-border);padding-left:12px}.sm-system-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}}
       @container (max-width:459px){.sm-resource-card .sm-stat-value{font-size:12px}.sm-resource-card .sm-stat{padding:8px 9px}.sm-resource-card{padding:12px}}
@@ -24,8 +27,47 @@ window.__ModuleLoader__.load({
       const s=Math.floor((b-a)/1000);return s<60?`${s}秒`:s<3600?`${Math.floor(s/60)}分${s%60}秒`:`${Math.floor(s/3600)}時間${Math.floor(s%3600/60)}分`;
     }
     const ratio=(value,total)=>Number.isSafeInteger(value)&&value>=0&&Number.isSafeInteger(total)&&total>0&&value<=total?value/total:null;
-    const readAuto=()=>{try{return window.localStorage.getItem(AUTO_KEY)!=='false';}catch{return true;}};
-    const writeAuto=value=>{try{window.localStorage.setItem(AUTO_KEY,String(value));}catch{}};
+    function panePreferences(value){
+      return {open:openModes.includes(value?.open)?value.open:'manual',placement:placements.includes(value?.placement)?value.placement:'tabs'};
+    }
+    function readPanePreferences(){
+      try{
+        const saved=window.localStorage.getItem(PANE_KEY);
+        if(saved!==null)return panePreferences(JSON.parse(saved));
+        return panePreferences({open:window.localStorage.getItem(AUTO_KEY)==='true'?'resources':'manual'});
+      }catch{return panePreferences();}
+    }
+    function autoOpenPanes(sidebar,preferences,wide){
+      const {open,placement}=preferences;
+      if(!wide||open==='manual'||sidebar.isExpanded())return false;
+      const active=sidebar.active();
+      if(!active||active.kind!=='guide')return false;
+      const replaceGuide={replaceTab:active.id};
+      if(open==='resources'||open==='catalog'){
+        sidebar.openTab(open==='resources'?KIND:CATALOG,replaceGuide);
+        return true;
+      }
+      const first=placement==='catalogLeft'?CATALOG:KIND,second=first===KIND?CATALOG:KIND;
+      sidebar.openTab(first,replaceGuide);
+      sidebar.openTab(second,{preferNewPane:placement!=='tabs'});
+      return true;
+    }
+    function PaneSettings({t=key=>dictionaries.en[key]}){
+      const [preferences,setPreferences]=useState(readPanePreferences),[error,setError]=useState(false);
+      function change(key,value){
+        const next=panePreferences({...preferences,[key]:value});
+        try{
+          window.localStorage.setItem(PANE_KEY,JSON.stringify(next));
+          setPreferences(next);setError(false);
+        }catch{setError(true);}
+      }
+      const select=(key,choices,disabled=false)=>h('label',null,t(key),h('select',{value:preferences[key],disabled,onChange:event=>change(key,event.target.value)},
+        ...choices.map(choice=>h('option',{key:choice,value:choice},t(choice)))));
+      return h('section',{className:'sm-pane-settings','data-studio-pane-settings':true},
+        h('style',null,'.sm-pane-settings{display:grid;gap:12px;margin-block:12px}.sm-pane-settings h3,.sm-pane-settings p{margin:0}.sm-pane-settings label{display:grid;gap:5px;font-size:13px}.sm-pane-settings select{width:100%;padding:7px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:inherit;font:inherit}.sm-pane-settings p{font-size:12px;color:var(--dsw-alias-label-secondary)}'),
+        h('h3',null,t('paneTitle')),select('open',openModes),select('placement',placements,preferences.open!=='both'),
+        h('p',null,t('paneHelp')),error?h('p',{role:'alert'},t('paneSaveError')):null);
+    }
     function Icon({kind='activity',size=16}){
       const paths={activity:'M3 12h4l3-8 4 16 3-8h4',chip:'M8 8h8v8H8zM9 3v3m6-3v3m-6 12v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3',image:'M4 4h16v16H4zM4 16l5-5 4 4 3-3 4 4M15 8h.01',layers:'m12 3 9 5-9 5-9-5 9-5zm-9 9 9 5 9-5M3 16l9 5 9-5',check:'m5 12 4 4L19 6'};
       return h('svg',{width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.6,strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':true},h('path',{d:paths[kind]??paths.activity}));
@@ -120,7 +162,7 @@ window.__ModuleLoader__.load({
         nodes.length?h('div',{className:'sm-node'},...nodes.map(node=>h('div',{key:node.nodeId},h('div',{className:'sm-row'},h('span',{className:'sm-muted'},`ComfyUI ノード ${node.nodeId}`),h('strong',{className:'sm-numeric'},`${node.value} / ${node.max}`)),h(Meter,{value:node.value,total:node.max,label:`ノード${node.nodeId}内の進捗`,unit:'count'}),h('p',{className:'sm-footnote'},`観測 ${clock(matching.observedAt)} · このノード内の進捗です`)))):activeRun?h('p',{className:'sm-footnote'},'現在ノードの進捗は未取得です。生成失敗を意味しません。'):null,
         typeof renderActions==='function'?renderActions(job):null);
     }
-    function Dashboard({state,error,now=Date.now(),auto,onAutoChange,renderActions,renderSessionActions,renderServices}){
+    function Dashboard({state,error,now=Date.now(),renderActions,renderSessionActions,renderServices}){
       const jobs=Array.isArray(state?.jobs)?state.jobs:[],working=jobs.filter(j=>!['completed','failed','cancelled','needs_user'].includes(j.phase)&&j.latestUserDecision?.decision!=='accept'),history=jobs.filter(j=>!working.includes(j));
       return h('div',{className:'studio-monitor','data-studio-monitor':true},h('style',null,css),
         h('header',{className:'sm-heading'},h('div',null,h('div',{className:'sm-eyebrow'},'MEDIA STUDIO'),h('h2',null,'Media & Resources')),badge(error?'更新停止':state?'接続中':'接続待ち',error?'warning':state?'success':'idle')),
@@ -132,12 +174,11 @@ window.__ModuleLoader__.load({
           working.length?h('ul',{className:'sm-joblist'},...working.map(job=>jobRow(job,state.nodeProgress,now,renderActions))):h('div',{className:'sm-empty'},h(Icon,{kind:'layers',size:25}),h('p',null,'実行中の制作はありません')),
           history.length?h('details',{className:'sm-history',open:working.length===0},h('summary',null,`完了・確認待ちなど ${history.length} 件`),h('ul',{className:'sm-joblist'},...history.map(job=>jobRow(job,null,now,renderActions)))):null,
           h('p',{className:'sm-footnote'},'工程の位置とノード内の進捗を表示します。制作全体の進捗率や残り時間ではありません。'),typeof renderSessionActions==='function'?renderSessionActions():null),
-        h('label',{className:'sm-settings'},h('input',{type:'checkbox',checked:auto,onChange:e=>onAutoChange?.(e.target.checked)}),'広い画面で未使用の右ペインに自動表示'),
         h('p',{className:'sm-footnote'},state?`状態の取得 ${clock(state.observedAt)} · 資源は約12秒ごとの計測`:'状態を取得してから制作の操作を表示します。'));
     }
     function Monitor({sessionId,useTabInfo,renderSlot}){
       const info=useTabInfo(),visible=info.tab.visible;
-      const [snapshot,setSnapshot]=useState(null),[error,setError]=useState(''),[now,setNow]=useState(Date.now()),[auto,setAuto]=useState(readAuto);
+      const [snapshot,setSnapshot]=useState(null),[error,setError]=useState(''),[now,setNow]=useState(Date.now());
       const state=snapshot&&snapshot.sessionId===sessionId?snapshot.value:null;
       useEffect(()=>{
         setSnapshot(null);setError('');if(!visible||!sessionId)return;
@@ -156,9 +197,8 @@ window.__ModuleLoader__.load({
         poll();tick=setInterval(()=>{if(document.visibilityState!=='hidden')setNow(Date.now());},1000);
         return()=>{done=true;if(timer)clearTimeout(timer);if(tick)clearInterval(tick);request?.abort();};
       },[visible,sessionId]);
-      return h(Dashboard,{state,error,now,auto,onAutoChange:value=>{writeAuto(value);setAuto(value);},renderActions:typeof renderSlot==='function'?job=>renderSlot('studio.monitor.production.actions',{job}):undefined,renderSessionActions:typeof renderSlot==='function'?()=>renderSlot('studio.monitor.session.actions',{}):undefined,renderServices:typeof renderSlot==='function'?()=>renderSlot('studio.monitor.services',{visible}):undefined});
+      return h(Dashboard,{state,error,now,renderActions:typeof renderSlot==='function'?job=>renderSlot('studio.monitor.production.actions',{job}):undefined,renderSessionActions:typeof renderSlot==='function'?()=>renderSlot('studio.monitor.session.actions',{}):undefined,renderServices:typeof renderSlot==='function'?()=>renderSlot('studio.monitor.services',{visible}):undefined});
     }
-    const CATALOG='studio-catalog', LOCALE='studio.catalog', CATALOG_TITLE='Catalog';
     function PaneButtons({open,considerAuto,composer=false}){
       const [error,setError]=useState('');
       useEffect(()=>{considerAuto?.();},[considerAuto]);
@@ -177,12 +217,14 @@ window.__ModuleLoader__.load({
       en:{description:'ComfyUI workflows and Strata model',refresh:'Refresh',core:'Strata model',configured:'Model in startup settings',running:'Loaded model',unloaded:'Not loaded',unknown:'Unavailable',changed:'Settings differ from startup',repository:'Source',quantization:'Quantization',weights:'Weights file',revision:'Revision',context:'Context',engine:'Engine',vision:'Image input',available:'Available',off:'Disabled',workflows:'ComfyUI workflows',search:'Model or keyword',searchButton:'Search',media:'Media',mode:'Operation',all:'All',image:'Image',video:'Video',ready:'Dependencies found',missing:'Missing dependencies',invalid:'Template unavailable',standalone:'Standalone ComfyUI',managed:'Managed by DSH',details:'Location and details',models:'Missing models',nodes:'Missing nodes',prev:'Previous',next:'Next',loading:'Loading…',error:'Unable to load. Check the service and refresh.',empty:'No matching workflows.',unconfigured:'The workflow library is unconfigured.',checked:'Checked at',scope:'Execution depends on the model and available resources.'},
     };
     Object.assign(dictionaries.ja,{
+      paneTitle:'Media Studioの右ペイン',open:'会話を開いたとき',placement:'両方開くときの配置',manual:'手動で開く',resources:'Media & Resources',catalog:'Catalog',both:'両方を開く',tabs:'同じペインにタブで表示',resourcesLeft:'左に Media & Resources、右に Catalog',catalogLeft:'左に Catalog、右に Media & Resources',paneHelp:'未使用の右ペインに自動展開します。画面が狭い場合は自動展開せず、分割できない場合は同じペインに表示します。',paneSaveError:'右ペインの設定を保存できませんでした。',
       addPrompt:'プロンプトに追加',promptAdded:'入力欄に追加しました。',promptBlocked:'入力欄に追加できません。会話と入力欄の状態を確認してください。',managedUnavailable:'DSHでは利用不可',
       resourceUse:'予想リソース消費量',modelDisk:'モデルのディスク容量',peakVram:'VRAM増加・観測最大',
       peakRam:'ComfyUIの物理RAM・観測最大',ramBudget:'Strataの常駐RAM設定',unmeasured:'未測定',
       sample:'測定条件',resourceNote:'既定フローでの参考値です。モデル、寸法、同時作業によって変動します。',
     });
     Object.assign(dictionaries.en,{
+      paneTitle:'Media Studio right pane',open:'When opening a conversation',placement:'Layout when opening both',manual:'Open manually',resources:'Media & Resources',catalog:'Catalog',both:'Open both',tabs:'Tabs in one pane',resourcesLeft:'Media & Resources left, Catalog right',catalogLeft:'Catalog left, Media & Resources right',paneHelp:'Auto-open uses an unused right pane on wide screens. If the pane cannot split, both open as tabs.',paneSaveError:'Could not save right-pane preferences.',
       addPrompt:'Add to prompt',promptAdded:'Added to the message draft.',promptBlocked:'Could not add to the draft. Check the conversation and composer.',managedUnavailable:'Unavailable in DSH',
       resourceUse:'Expected resource use',modelDisk:'Model files on disk',peakVram:'Largest sampled VRAM increase',
       peakRam:'Peak sampled ComfyUI working set',ramBudget:'Strata resident RAM setting',unmeasured:'Unmeasured',
@@ -326,6 +368,7 @@ window.__ModuleLoader__.load({
       };
       ctx.effect(()=>ctx.sidebarRightTabs.register({id:ID,kind:KIND,keepMounted:true,title:()=> 'Media & Resources',guide:[{id:ID,order:20,title:()=> 'Media & Resources',description:()=> 'Strata・ComfyUIの資源と、この会話の制作工程',icon:Icon}]}));
       ctx.effect(()=>ctx.locale.register(LOCALE,dictionaries));
+      ctx.slots.inject('settings.general.item',()=>ctx.slots.register({name:'settings.general.item',id:'studio-monitor-panes',order:15,locale:LOCALE},PaneSettings));
       ctx.effect(()=>ctx.sidebarRightTabs.register({id:CATALOG,kind:CATALOG,title:()=>CATALOG_TITLE,
         guide:[{id:CATALOG,order:21,title:()=>CATALOG_TITLE,description:()=>ctx.locale.bind(LOCALE)('description'),icon:()=>h(Icon,{kind:'layers'})}]}));
       ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({
@@ -346,9 +389,10 @@ window.__ModuleLoader__.load({
         open:openFor(sessionId),
         considerAuto:()=>{
           if(considered.has(sessionId)||!mounted(sessionId))return;
-          considered.add(sessionId);if(considered.size>256)considered.delete(considered.values().next().value);
-          if(!readAuto()||!window.matchMedia?.('(min-width: 1100px)').matches)return;
-          try{const current=ctx.sidebarRight.active();if(!ctx.sidebarRight.isExpanded()&&(!current||current.kind==='guide'))ctx.sidebarRight.openTab(KIND);}catch{}
+          try{
+            if(!autoOpenPanes(ctx.sidebarRight,readPanePreferences(),Boolean(window.matchMedia?.('(min-width: 1100px)').matches)))return;
+            considered.add(sessionId);if(considered.size>256)considered.delete(considered.values().next().value);
+          }catch{}
         },
       })},PaneButtons));
       ctx.slots.inject('conversation.input.dock',()=>ctx.slots.register({
@@ -356,6 +400,6 @@ window.__ModuleLoader__.load({
       },BlankComposerButtons));
       ctx.effect(()=>()=>considered.clear());
     }
-    return {inject:['slots','sidebarRight','sidebarRightTabs','locale','sessions','conversation'],apply,Monitor,PaneButtons,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog,CoreModel,workflowPrompt};
+    return {inject:['slots','sidebarRight','sidebarRightTabs','locale','sessions','conversation'],apply,Monitor,PaneButtons,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog,CoreModel,workflowPrompt,PaneSettings,readPanePreferences,autoOpenPanes};
   },
 });
