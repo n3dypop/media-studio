@@ -113,3 +113,36 @@ test('ComfyUI applies only the reviewed official commit with compatible local de
   await applyEngineUpdate(root,'ComfyUI',target,options);
   assert.equal(head,target);
 });
+
+test('Strata binds the signed update and installation receipt to the checked engine manifest',async t=>{
+  const {root,config,receipt,source}=await fixture(t);
+  const product=join(root,'product'),control=join(product,'.runtime/terminal/1.2.3');
+  const engines=join(product,'.runtime/components/engine'),engine=join(engines,'old-engine'),next=join(engines,'new-engine');
+  for(const folder of [join(control,'python'),engine,next])await mkdir(folder,{recursive:true});
+  for(const [file,content] of [[join(control,'VERSION'),'1.2.3'],[join(control,'python/python.exe'),''],[join(control,'strata.py'),''],[join(engine,'engine-component.json'),'{"version":"1.2.3"}']])await writeFile(file,content);
+  const raw=JSON.stringify({...source,exe:'component:strata-engine'}),manifest='{"version":"1.2.4"}';
+  await writeFile(config,raw);
+  await writeFile(receipt,JSON.stringify({prepared:true,schemaVersion:1,workspace:root,productRoot:product,control,engine,model:'fixture',config,configSha256:sha(raw)}));
+  const archive='a'.repeat(64),feed='https://github.com/Niko1221/Strata/releases/download/v9.8.7/strata-feed.json';
+  const candidate={version:'1.2.4',backend:'cuda',variant:'cuda13',build_id:'reviewed-build',sha256:archive,manifest_sha256:sha(manifest)};
+  const options={
+    fetcher:async url=>{assert.equal(url,'https://api.github.com/repos/Niko1221/Strata/releases/latest');return Response.json({tag_name:'v9.8.7'});},
+    run:async (_file,args)=>{
+      assert.equal(args[args.indexOf('--feed')+1],feed);
+      assert.ok(args.includes('--no-control'));
+      return {stdout:JSON.stringify({schema_version:1,ok:true,...(args.includes('--check')
+        ?{engine:{status:'available',installed:{folder:'old-engine',backend:'cuda',variant:'cuda13'},offered:candidate}}
+        :{results:[{component:'engine',status:'updated',installed_after:{...candidate,signed:true,folder:'new-engine'}}]})})};
+    },
+  };
+  assert.equal((await checkEngineUpdate(root,'Strata',options)).identity,archive);
+  await writeFile(join(next,'engine-component.json'),'{}');
+  await assert.rejects(applyEngineUpdate(root,'Strata',archive,options),{uncertain:true});
+  assert.equal(JSON.parse(await readFile(receipt,'utf8')).engine,engine);
+  await writeFile(join(next,'engine-component.json'),manifest);
+  await applyEngineUpdate(root,'Strata',archive,options);
+  const installed=JSON.parse(await readFile(receipt,'utf8'));
+  assert.equal(installed.engine,next);
+  assert.equal(installed.engineArchiveSha256,archive);
+  assert.equal(await readFile(config,'utf8'),raw);
+});
