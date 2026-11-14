@@ -187,12 +187,18 @@ test('Catalog is beside Resources and opens its own pane in the mounted conversa
   let mounted = 'current', draftResult = 'applied';
   const binding = { id: 'current' };
   let currentBinding = binding;
+  let presetRefused = false;
   let summary = { blank: false, projectionValues: { agentPreset: 'local-image' } };
   client.apply({
     effect: fn => fn(),
     locale: { register() {}, bind: () => key => key },
     sessions: { list: { getSnapshot: () => ({ byId: { current: summary } }) }, binding: id => { assert.equal(id, binding.id); return currentBinding; } },
-    remote: { agentPresets: { select: async (id, preset) => { presetRequests.push([id, preset]); currentBinding={id}; return { ok: true, value: preset }; } } },
+    remote: { agentPresets: { select: async (id, preset) => {
+      presetRequests.push([id, preset]);
+      if (presetRefused) return { ok: false };
+      currentBinding={id};
+      return { ok: true, value: preset };
+    } } },
     uiWorkspace: { startSession: (_workspace, options) => studioDrafts.push(options) },
     conversation: { input: { requestDraftInitialization: (target, options) => {
       draftRequests.push({ target, ...options });
@@ -241,6 +247,13 @@ test('Catalog is beside Resources and opens its own pane in the mounted conversa
   assert.equal(draftRequests.length, 3);
   assert.equal(studioDrafts[0].agentPreset, 'local-image');
   assert.equal(studioDrafts[0].prompt, 'separate studio draft');
+  summary = { blank: true, projectionValues: { agentPreset: 'standard' } };
+  presetRefused = true;
+  assert.equal(await appendPrompt('preset selection fallback'), true);
+  assert.equal(draftRequests.length, 3, 'The original draft is preserved');
+  assert.deepEqual(JSON.parse(JSON.stringify(studioDrafts[1])), {
+    prompt: 'preset selection fallback', whenDraftExists: 'append', agentPreset: 'local-image',
+  });
 });
 
 test('workflow prompts retain the exact managed profile and hand off standalone workflows', async () => {

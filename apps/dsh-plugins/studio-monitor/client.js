@@ -432,20 +432,25 @@ window.__ModuleLoader__.load({
             if(!mounted(sessionId))return false;
             try{
               const draft={prompt,whenDraftExists:'append'};
-              if(startsStudio(sessionId)){
+              const openStudioDraft=()=>{
+                if(!mounted(sessionId))return false;
                 ctx.uiWorkspace.startSession(undefined,{...draft,agentPreset:'local-image'});
                 return true;
-              }
+              };
+              if(startsStudio(sessionId))return openStudioDraft();
               let binding=ctx.sessions.binding(sessionId);
-              if(!binding)return false;
               if(summary(sessionId)?.projectionValues?.agentPreset!=='local-image'){
+                if(!binding)return openStudioDraft();
                 const previousBinding=binding;
-                if(!selectionPending.has(binding)){
-                  const selection=ctx.remote.agentPresets.select(sessionId,'local-image');
-                  selectionPending.set(binding,selection);
-                }
-                const selection=selectionPending.get(binding);
-                try{const result=await selection;if(!result.ok||result.value!=='local-image')return false;}
+                let selection=selectionPending.get(binding);
+                try{
+                  if(!selection){
+                    selection=ctx.remote.agentPresets.select(sessionId,'local-image');
+                    selectionPending.set(previousBinding,selection);
+                  }
+                  const result=await selection;
+                  if(!result?.ok||result.value!=='local-image')return openStudioDraft();
+                }catch{return openStudioDraft();}
                 finally{if(selectionPending.get(previousBinding)===selection)selectionPending.delete(previousBinding);}
                 if(!mounted(sessionId))return false;
                 // Preset selection can recompose the same blank conversation.

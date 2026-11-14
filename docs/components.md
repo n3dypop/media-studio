@@ -28,6 +28,8 @@ are in the conversation header, or above the composer in a new conversation.
 The workflow list supports keyword, media and operation filters.
 **Add to prompt** appends a request and keeps the current draft's attachments.
 A blank conversation selects the Media Studio preset before inserting the request.
+If the Host declines that switch, Catalog opens a Media Studio draft through the
+workspace launcher and preserves the original draft.
 **Open in Media Studio** prepares a separate draft from an existing conversation
 with another preset. Check the draft and send it when ready.
 Managed workflows insert the exact profile and operation. Standalone entries insert
