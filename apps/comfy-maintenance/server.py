@@ -32,7 +32,7 @@ def checked_graph(file, base):
     return file
 
 
-def run_cli(*args):
+def run_cli(*args, validation=False):
     result = subprocess.run(
         [str(CLI), "--json", *map(str, args)], cwd=COMFY,
         capture_output=True, encoding="utf-8", timeout=25,
@@ -45,7 +45,12 @@ def run_cli(*args):
     except ValueError:
         raise ValueError("The local Comfy CLI did not return JSON.") from None
     data = envelope.get("data")
-    if envelope.get("ok") is not True or not isinstance(data, dict):
+    invalid_workflow = (
+        validation and isinstance(data, dict) and data.get("valid") is False
+        and type(data.get("error_count")) is int and type(data.get("warning_count")) is int
+        and isinstance(data.get("errors"), list) and isinstance(data.get("warnings"), list)
+    )
+    if not isinstance(data, dict) or (envelope.get("ok") is not True and not invalid_workflow):
         raise ValueError("Comfy CLI rejected the request. Check the arguments and the local ComfyUI service.")
     return data
 
@@ -114,7 +119,7 @@ def resolve_workflow(name):
 
 def validate_workflow(workflow: str) -> dict:
     """Statically validate a saved workflow or draft against local ComfyUI. Does not queue a job."""
-    data = run_cli("workflow", "validate", "--where", "local", "--workflow", resolve_workflow(workflow))
+    data = run_cli("workflow", "validate", "--where", "local", "--workflow", resolve_workflow(workflow), validation=True)
     errors, warnings = data.get("errors", []), data.get("warnings", [])
     issues = [{key: str(item[key])[:160] for key in ("node_id", "field", "code", "message") if key in item}
               for item in (errors + warnings)[:3] if isinstance(item, dict)]
@@ -129,6 +134,6 @@ for tool in TOOLS.values():
 
 if __name__ == "__main__":
     if len(sys.argv) == 4 and sys.argv[1] == "--cli":
-        print(json.dumps(TOOLS[sys.argv[2]](**json.loads(sys.argv[3])), ensure_ascii=False))
+        print(json.dumps(TOOLS[sys.argv[2]](**json.loads(sys.argv[3]))))
     else:
         SERVER.run(transport="stdio")
