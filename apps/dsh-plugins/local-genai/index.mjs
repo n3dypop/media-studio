@@ -192,7 +192,8 @@ export function workflowCatalogForAgent(catalog, role, { mode: requestedMode } =
     ...Object.fromEntries(['modelProfile', 'requestedProfile', 'requestedProfileStatus', 'mode', 'templateStatus', 'validationScope']
       .filter(key => fields[key] !== undefined).map(key => [key, fields[key]])),
     modelProfiles: (modelProfiles ?? []).map(({ id, label, available, qualification }) => ({ id, label, available, ...(qualification === undefined ? {} : { qualification }) })),
-    capabilities: (capabilities ?? []).filter(item => !requestedMode || item.mode === requestedMode),
+    capabilities: (capabilities ?? []).filter(item => !requestedMode || item.mode === requestedMode)
+      .map(({ runtimeTested, ...item }) => runtimeTested === true ? { ...item, runtimeTested } : item),
     models: (models ?? []).map(({ name, available }) => ({ name, available })),
     templates: (templates ?? []).map(({ id, available, sha256 }) => ({ id, available, sha256 })),
     limits: productionLimits,

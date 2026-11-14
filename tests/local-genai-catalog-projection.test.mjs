@@ -8,7 +8,7 @@ test('studio catalog keeps template selection usable without returning a graph o
     modelProfile, mode: 't2i',
     modelProfiles: [{ id: modelProfile, label: 'MOSS Image', available: true, ledger: { source: 'fixture' } }],
     models: [{ name: 'moss.safetensors', nodeType: 'UNETLoader', available: true }],
-    capabilities: [{ modelProfile, mode: 't2i' }, { modelProfile, mode: 'edit', inputRequired: true }],
+    capabilities: [{ modelProfile, mode: 't2i', runtimeTested: false }, { modelProfile, mode: 'edit', inputRequired: true }],
     templates: [{ id: modelProfile, available: true, sha256: 'a'.repeat(64), graph: { '1': { class_type: 'UNETLoader' } } }],
     limits: { maxPixels: 1500000, maxSteps: 40, topology: ['fixture'] },
     nodeSchemas: { UNETLoader: {} }, coreModelLedger: { engine: 'Strata' },
@@ -17,7 +17,8 @@ test('studio catalog keeps template selection usable without returning a graph o
   const compact = workflowCatalogForAgent(catalog, 'studio');
   assert.deepEqual(compact.modelProfiles, [{ id: modelProfile, label: 'MOSS Image', available: true }]);
   assert.deepEqual(JSON.parse(JSON.stringify(compact)), compact, 'DSH tool output must be lossless JSON');
-  assert.deepEqual(compact.capabilities, catalog.capabilities, 'the default template mode must not hide other operations');
+  assert.deepEqual(compact.capabilities, [{ modelProfile, mode: 't2i' }, catalog.capabilities[1]],
+    'include all operations and omit the static discovery flag that says nothing about prior GPU tests');
   assert.deepEqual(workflowCatalogForAgent(catalog, 'studio', { mode: 'edit' }).capabilities, [catalog.capabilities[1]]);
   assert.deepEqual(compact.templates, [{ id: modelProfile, available: true, sha256: 'a'.repeat(64) }]);
   assert.deepEqual(compact.limits, { maxPixels: 1500000, maxSteps: 40 });
