@@ -436,18 +436,22 @@ window.__ModuleLoader__.load({
                 ctx.uiWorkspace.startSession(undefined,{...draft,agentPreset:'local-image'});
                 return true;
               }
-              const binding=ctx.sessions.binding(sessionId);
+              let binding=ctx.sessions.binding(sessionId);
               if(!binding)return false;
               if(summary(sessionId)?.projectionValues?.agentPreset!=='local-image'){
+                const previousBinding=binding;
                 if(!selectionPending.has(binding)){
                   const selection=ctx.remote.agentPresets.select(sessionId,'local-image');
                   selectionPending.set(binding,selection);
                 }
                 const selection=selectionPending.get(binding);
                 try{const result=await selection;if(!result.ok||result.value!=='local-image')return false;}
-                finally{if(selectionPending.get(binding)===selection)selectionPending.delete(binding);}
+                finally{if(selectionPending.get(previousBinding)===selection)selectionPending.delete(previousBinding);}
+                if(!mounted(sessionId))return false;
+                // Preset selection can recompose the same blank conversation.
+                binding=ctx.sessions.binding(sessionId);
               }
-              return mounted(sessionId)&&ctx.sessions.binding(sessionId)===binding&&ctx.conversation.input.requestDraftInitialization(binding,draft)==='applied';
+              return Boolean(binding&&mounted(sessionId)&&ctx.sessions.binding(sessionId)===binding&&ctx.conversation.input.requestDraftInitialization(binding,draft)==='applied');
             }catch{return false;}
           }}),
       },Catalog));

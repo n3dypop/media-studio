@@ -186,12 +186,13 @@ test('Catalog is beside Resources and opens its own pane in the mounted conversa
   const tabs = [], slots = [], opened = [], draftRequests = [], presetRequests = [], studioDrafts = [];
   let mounted = 'current', draftResult = 'applied';
   const binding = { id: 'current' };
+  let currentBinding = binding;
   let summary = { blank: false, projectionValues: { agentPreset: 'local-image' } };
   client.apply({
     effect: fn => fn(),
     locale: { register() {}, bind: () => key => key },
-    sessions: { list: { getSnapshot: () => ({ byId: { current: summary } }) }, binding: id => { assert.equal(id, binding.id); return binding; } },
-    remote: { agentPresets: { select: async (id, preset) => { presetRequests.push([id, preset]); return { ok: true, value: preset }; } } },
+    sessions: { list: { getSnapshot: () => ({ byId: { current: summary } }) }, binding: id => { assert.equal(id, binding.id); return currentBinding; } },
+    remote: { agentPresets: { select: async (id, preset) => { presetRequests.push([id, preset]); currentBinding={id}; return { ok: true, value: preset }; } } },
     uiWorkspace: { startSession: (_workspace, options) => studioDrafts.push(options) },
     conversation: { input: { requestDraftInitialization: (target, options) => {
       draftRequests.push({ target, ...options });
@@ -232,7 +233,8 @@ test('Catalog is beside Resources and opens its own pane in the mounted conversa
   summary = { blank: true, projectionValues: { agentPreset: 'standard' } };
   assert.equal(await appendPrompt('blank studio draft'), true);
   assert.deepEqual(presetRequests, [['current', 'local-image']]);
-  assert.equal(draftRequests[2].target, binding);
+  assert.notEqual(currentBinding, binding, 'Desktop may replace the binding during preset selection');
+  assert.equal(draftRequests[2].target, currentBinding);
   summary = { ...summary, blank: false };
   assert.equal(catalog.inject('current').startsStudio, true);
   assert.equal(await appendPrompt('separate studio draft'), true);
