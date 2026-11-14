@@ -1,7 +1,7 @@
 #Requires -Version 7.2
 <#
-Launch the installed Desktop using the configured local runtime. Apply any
-confirmed Desktop Session Library reservations while the Desktop Host is absent.
+Launch the installed Desktop using the configured local runtime. Its profile
+owns Session Library startup, including launches from the ordinary shortcut.
 The shared web host must be stopped before launch. A direct simultaneous launch
 can race these checks; process creation is not proof of Desktop readiness.
 #>
@@ -81,27 +81,6 @@ try {
     $phase = 'token'
     $token = [IO.File]::ReadAllText($tokenFile).Trim()
     if ($token -cnotmatch '^[a-f0-9]{64}$') { throw 'Invalid Controller token.' }
-    $phase = 'session-library'
-    $queue = Join-Path $desktopHomePath 'session-library\queue.json'
-    if (Test-Path -LiteralPath $queue) {
-        $null = Assert-NoReparse $queue
-        $plugins = Assert-NoReparse (Join-Path $desktopHomePath 'plugins\n3dypop\dsh-plugins')
-        $deletion = Assert-NoReparse (Join-Path $plugins 'scripts\maintenance\Apply-SessionDeletions.mjs')
-        $startInfo = [Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = $exe
-        $startInfo.WorkingDirectory = $desktopHomePath
-        $startInfo.UseShellExecute = $false
-        $startInfo.CreateNoWindow = $true
-        $startInfo.Environment['ELECTRON_RUN_AS_NODE'] = '1'
-        [void]$startInfo.Environment.Remove('NODE_OPTIONS')
-        [void]$startInfo.Environment.Remove('NODE_PATH')
-        foreach ($argument in @($deletion,'--desktop-home',$desktopHomePath)) { [void]$startInfo.ArgumentList.Add($argument) }
-        $apply = [Diagnostics.Process]::Start($startInfo)
-        try {
-            $apply.WaitForExit()
-            if ($apply.ExitCode -ne 0) { throw 'Desktop Session Library reservations were not applied.' }
-        } finally { $apply.Dispose() }
-    }
     $phase = 'start'
     Add-Type -LiteralPath $helper
     $pidValue = [MediaStudioDesktopProcess]::Start($exe, [IO.Path]::GetDirectoryName($exe), $runtime, $desktopHomePath)
@@ -114,7 +93,6 @@ try {
         'existing-desktop' { 'Desktopが起動中、または起動状態を確認できません。' }
         'web-host' { 'ブラウザ版DSHが起動中、または待受と管理状態を確認できません。' }
         'token' { 'Controllerの接続情報を確認できません。' }
-        'session-library' { '削除予約の処理結果を確認できません。履歴を保護するためDesktopを起動しませんでした。' }
         default { 'Desktopを起動できません。' }
     }
     [Console]::Error.WriteLine($message)
