@@ -42,8 +42,8 @@ try {
     $profile = Assert-NoReparse (Join-Path $desktopHomePath 'profiles\desktop\cordis.patch.yml')
     $exe = Assert-NoReparse $DesktopExecutable
     $config = Assert-NoReparse (Join-Path $runtime 'config\environment.json')
-    # Desktop is a DSH client. Never hand the Controller's admin token to the
-    # model provider: the restricted DSH token enforces inference ownership.
+    # Check the restricted credential the Host gateway will read. No token is
+    # passed to the GUI or stored as a model provider credential.
     $tokenFile = Assert-NoReparse (Join-Path $runtime 'data\controller\dsh-token')
     $helper = Assert-NoReparse (Join-Path $PSScriptRoot 'DesktopProcess.cs')
     $exeItem = Get-Item -LiteralPath $exe -Force
@@ -83,7 +83,7 @@ try {
     if ($token -cnotmatch '^[a-f0-9]{64}$') { throw 'Invalid Controller token.' }
     $phase = 'start'
     Add-Type -LiteralPath $helper
-    $pidValue = [MediaStudioDesktopProcess]::Start($exe, [IO.Path]::GetDirectoryName($exe), $token, $runtime, $desktopHomePath)
+    $pidValue = [MediaStudioDesktopProcess]::Start($exe, [IO.Path]::GetDirectoryName($exe), $runtime, $desktopHomePath)
     if ($pidValue -le 0) { throw 'Desktop process was not created.' }
     Write-Output (ConvertTo-Json -Compress @{ pid=$pidValue; state='created' })
 } catch {

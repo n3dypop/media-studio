@@ -8,7 +8,7 @@
         displayName: Strata
         api: openai-completions
         baseURL: http://127.0.0.1:3090/v1
-        apiKeyEnv: MEDIA_STUDIO_DSH_TOKEN
+        apiKeyEnv: LOCAL_GENAI_DSH_TOKEN
         models:
           - id: strata-core
             name: ACTUAL_INSTALLED_CORE_MODEL_DISPLAY_NAME

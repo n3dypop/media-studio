@@ -1,5 +1,5 @@
-// Windows GUI process creation with a private environment block. The token is
-// not included in the command line and no parent handles are inherited.
+// Windows GUI process creation with a private environment block. The gateway
+// reads the Controller token itself. No parent handles are inherited.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -32,9 +32,9 @@ public static class MediaStudioDesktopProcess {
         return result.Append('\\', slashes * 2).Append('"').ToString();
     }
 
-    public static int Start(string executable, string cwd, string token, string runtimeHome, string desktopHome) {
+    public static int Start(string executable, string cwd, string runtimeHome, string desktopHome) {
         if (String.IsNullOrWhiteSpace(executable) || String.IsNullOrWhiteSpace(cwd) ||
-            String.IsNullOrWhiteSpace(token) || String.IsNullOrWhiteSpace(runtimeHome) ||
+            String.IsNullOrWhiteSpace(runtimeHome) ||
             String.IsNullOrWhiteSpace(desktopHome)) throw new ArgumentException("Invalid process configuration.");
         var env = new SortedDictionary<string,string>(StringComparer.OrdinalIgnoreCase);
         foreach (DictionaryEntry item in Environment.GetEnvironmentVariables()) {
@@ -43,7 +43,7 @@ public static class MediaStudioDesktopProcess {
             env[key] = value;
         }
         env.Remove("ELECTRON_RUN_AS_NODE");
-        env["LOCAL_GENAI_DSH_TOKEN"] = token;
+        env.Remove("LOCAL_GENAI_DSH_TOKEN");
         env["MEDIA_STUDIO_HOME"] = runtimeHome;
         env["DSH_HOME"] = desktopHome;
         var entries = new List<string>();

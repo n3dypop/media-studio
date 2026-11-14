@@ -11,7 +11,10 @@ leases, ComfyUI queues, Strata in-flight work and recorded process identity.
 Stopped-service checks require repeated proof of process absence and a free
 listener; inaccessible or reused identities remain unknown. Starting Controller
 prepares its required services in order and reuses only verified running
-instances. Stopping a dependency first stops Controller normally; restarting
+instances. It rechecks the required services immediately before launching
+Controller. The ComfyUI launcher accepts an absent ComfyUI-managed `temp`
+directory and works with its own configuration when started by itself.
+Stopping a dependency first stops Controller normally; restarting
 restores Controller only when it was running before the operation.
 
 Unload requires the target service and Controller to be running. It uses the
@@ -43,6 +46,8 @@ while retaining the journal for reconciliation. A failed or unknown operation
 keeps its explanation. Credentials, cookies and raw launcher output are not
 returned to the client or copied into operation receipts. Do not repeat an
 uncertain mutation or delete its ownership/lock records to bypass recovery.
+On a launcher failure, the operation points to its private stderr file under
+`logs/service-manager/`. A service's own startup logs remain under `logs/<service>/`.
 
 Disabling the plugin removes routes and controls, stops scheduling later steps,
 and retains already-running service processes and their records. It does not

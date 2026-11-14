@@ -5,7 +5,7 @@ import net from 'node:net';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
-import {probeWindowsEpoch,validateEpochEvidence} from '../../controller/epoch.mjs';
+import {createEpochVerifier,probeWindowsEpoch,validateEpochEvidence} from '../../controller/epoch.mjs';
 import {createStrataEpochVerifier} from '../../controller/strata-epoch.mjs';
 import {runServiceCommand} from './service-command-runner.mjs';
 import {controllerNodeExecutable} from '../../controller/service-paths.mjs';
@@ -81,6 +81,9 @@ function projectPath(root,relative){const path=resolve(root,relative);if(!path.s
 
 export async function createSystemAdapter({root,probeStopped=probeStoppedService,checkPort=portOpen,hostOrigin}){
   root=resolve(root);
+  const programFiles=process.env.ProgramW6432??process.env.ProgramFiles;
+  const standardPowerShell=programFiles&&win32.isAbsolute(programFiles)?join(programFiles,'PowerShell/7/pwsh.exe'):null;
+  const powerShell=standardPowerShell&&(await lstat(standardPowerShell).catch(()=>null))?.isFile()?standardPowerShell:'pwsh.exe';
   let environment,controller,strata,paths,descriptions;
   let configurationDirty=true;
   async function loadConfiguration(){
@@ -109,9 +112,10 @@ export async function createSystemAdapter({root,probeStopped=probeStoppedService
       }
       let epoch;
       if(id==='Strata')epoch=await createStrataEpochVerifier({root,expectedExecutable:expected.executable,baseUrl:expected.url})();
-      else epoch=validateEpochEvidence({pid:record.processId,startTimeUtcTicks:record.startTimeUtcTicks,executable:win32.normalize(expected.executable).toLowerCase(),url:expected.url},await probeWindowsEpoch({pid:record.processId,port:Number(new URL(expected.url).port)}));
+      else if(id==='ComfyUI')epoch=await createEpochVerifier({runtimePath:recordPath,expectedExecutable:expected.executable,baseUrl:expected.url})();
+      else epoch=validateEpochEvidence({pid:record.processId,startTimeUtcTicks:record.startTimeUtcTicks,executable:win32.normalize(expected.executable).toLowerCase(),url:expected.url},await probeWindowsEpoch({pid:record.processId,port}));
       if(id==='Controller'){
-        const health=await getJson(expected.url+'/health');if(health.service!=='local-image-controller'||health.ready!==true||health.pid!==epoch.pid||record.controllerId!==health.controllerId)throw Error('Controller identity differs');
+        const health=await getJson(expected.url+'/health');if(epoch.listenerPid!==epoch.pid||health.service!=='local-image-controller'||health.ready!==true||health.pid!==epoch.pid||record.controllerId!==health.controllerId)throw Error('Controller identity differs');
       }else if(id==='ComfyUI'){const stats=await getJson(expected.url+'/system_stats');if(!stats.system||!Array.isArray(stats.devices))throw Error('Comfy readiness unavailable');}
       else{const token=(await readFile(join(root,'data/strata/api-token'),'utf8')).trim(),value=await getJson(expected.url+'/v1/status',{Authorization:'Bearer '+token});if(value.service!=='strata'||value.started!==record.started||!Number.isSafeInteger(value.activity?.in_flight))throw Error('Strata readiness unavailable');}
       return {id,name:id,state:'running',detail:'管理プロセスと待受を照合済みです。'};
@@ -121,7 +125,7 @@ export async function createSystemAdapter({root,probeStopped=probeStoppedService
     if(!cookie)throw fault('本人のDSH接続を確認できません。',403);
     const dshOrigin=hostOrigin?hostOrigin():`http://127.0.0.1:${environment.dshPort}`,rpcId=randomUUID();
     if(!dshOrigin)throw fault('DSHの会話状態を確認できません。');
-    const response=await fetch(dshOrigin+'/api/session/list',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({type:'client-request',rpcId,method:'session/list',payload:{args:{_request:{}}}}),signal:AbortSignal.timeout(10000),redirect:'error'});
+    const response=await fetch(dshOrigin+'/api/session/list',{method:'POST',headers:{Cookie:cookie,Origin:dshOrigin,'Content-Type':'application/json'},body:JSON.stringify({type:'client-request',rpcId,method:'session/list',payload:{args:{_request:{}}}}),signal:AbortSignal.timeout(10000),redirect:'error'});
     const result=await response.json(),items=result.result?.value?.items;
     if(!response.ok||result.rpcId!==rpcId||result.result?.ok!==true||!Array.isArray(items)||items.some(item=>typeof item.running!=='boolean'))throw fault('DSHの会話状態を確認できません。');
     if(items.some(item=>item.running))throw fault('実行中の会話があります。終了後にサービスを操作してください。');
@@ -167,9 +171,26 @@ export async function createSystemAdapter({root,probeStopped=probeStoppedService
         return;
       }
       const args=scripts[step.service+':'+step.action];if(!args)throw fault('未対応の起動処理です。',400);
+      if(step.service==='Controller'&&step.action==='start'){
+        const dependencies=strata.enabled?['ComfyUI','Strata']:['ComfyUI'];
+        const states=await Promise.all(dependencies.map(serviceStatus));
+        const unavailable=states.filter(service=>service.state!=='running');
+        if(unavailable.length)throw fault(`Controllerの起動に必要な${unavailable.map(service=>service.name).join('・')}の稼働を確認できません。`);
+      }
       const script=projectPath(root,'scripts/'+args[0]);if((await lstat(script)).isSymbolicLink())throw Error('Linked launch script');
-      try{await runServiceCommand('pwsh.exe',['-NoLogo','-NoProfile','-NonInteractive','-File',script,...args.slice(1)],{cwd:root});}
-      catch(e){throw Object.assign(new Error(`${step.service}の${step.action==='start'?'起動':'停止'}を確認できません。対応するローカルログを確認してください。`),{uncertain:e.uncertain===true});}
+      const logDir=projectPath(root,'logs/service-manager');
+      const logName=`${step.service}-${step.action}-${randomUUID()}.stderr.log`;
+      const logPath=join(logDir,logName);
+      await mkdir(logDir,{recursive:true});
+      if(!(await lstat(logDir)).isDirectory())throw fault('サービス操作のログを準備できません。');
+      const log=await open(logPath,'wx',0o600);
+      try{
+        await runServiceCommand(powerShell,['-NoLogo','-NoProfile','-NonInteractive','-File',script,...args.slice(1)],{cwd:root,stderr:log.fd});
+      }catch(error){
+        const reason={spawn:'PowerShellを起動できません。',timeout:'PowerShellの終了確認が時間切れです。',interrupted:'PowerShellの終了結果が不明です。',exit:'起動・停止スクリプトがエラーを返しました。'}[error.reason];
+        throw Object.assign(new Error(`${step.service}の操作を確認できません。${reason??''} ログ: logs/service-manager/${logName}`),{uncertain:error.uncertain===true});
+      }finally{await log.close();}
+      await unlink(logPath).catch(()=>{});
     }};
 }
 
@@ -180,6 +201,7 @@ export async function createServiceManager({root,adapter,clock=()=>new Date(),id
   const projectReceipts=items=>items.map(item=>item.state==='running'?{...item,state:'unknown',detail:'前回のインスタンスのサービス操作は実行中または結果不明です。自動再実行しません。'}:item);
   const stored=await readJournal(journal),operations=Array.isArray(stored?.operations)?projectReceipts(stored.operations):[];
   let running=null,readPending=null,cache=null,disposed=false,generation=0,cacheGeneration=0;
+  function invalidateCache(){cache=null;cacheGeneration++;readPending=null;}
   const persist=async()=>{const tmp=journal+'.'+id()+'.partial';try{await writeFile(tmp,JSON.stringify({schemaVersion:1,operations},null,2)+'\n',{encoding:'utf8',flag:'wx'});await rename(tmp,journal);}finally{await unlink(tmp).catch(()=>{});}};
   const refreshReceipts=async()=>{if(running)return;const at=generation,stored=await readJournal(journal);if(running||generation!==at)return;if(Array.isArray(stored?.operations)){operations.splice(0,operations.length,...projectReceipts(stored.operations));generation++;}};
   const currentSnapshot=async fresh=>{
@@ -226,16 +248,16 @@ export async function createServiceManager({root,adapter,clock=()=>new Date(),id
             // Recheck before every destructive step. Stop scripts repeat
             // ownership, queue and controller-journal checks themselves.
             try{if(['stop','unload'].includes(step.action))await adapter.assertIdle(await currentSnapshot(true),cookie);await adapter.runStep(step);step.state='completed';}catch(e){step.state=e.uncertain?'unknown':'failed';throw e;}
-            cache=null;operation.updatedAt=clock().toISOString();await persist();
+            invalidateCache();operation.updatedAt=clock().toISOString();await persist();
           }
           operation.state='completed';operation.detail='サービス操作が完了しました。';
         }catch(e){operation.state=e.uncertain?'unknown':'failed';for(const step of steps)if(step.state==='running')step.state=operation.state;operation.detail=e.status?e.message:typeof e.message==='string'?e.message:'サービス操作を確認できません。';}
         finally{
-          operation.updatedAt=clock().toISOString();await persist().catch(()=>{operation.state='unknown';operation.detail='結果の保存を確認できません。自動再実行しません。';});cache=null;await handle.close().catch(()=>{});await unlink(lockPath).catch(()=>{});running=null;generation++;
+          operation.updatedAt=clock().toISOString();await persist().catch(()=>{operation.state='unknown';operation.detail='結果の保存を確認できません。自動再実行しません。';});invalidateCache();await handle.close().catch(()=>{});await unlink(lockPath).catch(()=>{});running=null;generation++;
         }
       })();
       return {operation:copy(operation),created:true};
     }catch(e){if(running===reservation){if(prepared){const index=operations.indexOf(prepared);if(index!==-1)operations.splice(index,1);}running=null;generation++;}if(lock){await lock.close().catch(()=>{});await unlink(lockPath).catch(()=>{});}throw e;}
   }
-  return {snapshot,submit,invalidateCache(){cache=null;cacheGeneration++;readPending=null;},dispose(){disposed=true;},async settled(){while(running)await new Promise(r=>setTimeout(r,10));}};
+  return {snapshot,submit,invalidateCache,dispose(){disposed=true;},async settled(){while(running)await new Promise(r=>setTimeout(r,10));}};
 }

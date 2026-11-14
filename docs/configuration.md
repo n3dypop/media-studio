@@ -176,10 +176,15 @@ Configure a private deployment in this order:
    to the actual installed model and replace capacity placeholders with verified
    integer limits. Declare image input only after the installed Strata vision
    path works; text-only routing cannot establish visual output review.
-3. Resolve `MEDIA_STUDIO_DSH_TOKEN` through DSH's private credential/environment
-   seam to the Controller's DSH token. `apiKeyEnv` is a reference name, not a
-   place to paste a token into YAML. The provider endpoint is Controller `/v1`,
-   not a direct Strata URL, so resource leases and ownership checks stay active.
+3. Use `LOCAL_GENAI_DSH_TOKEN` as the provider's `apiKeyEnv` reference. On Web,
+   resolve it through DSH's private credential/environment seam to the
+   Controller's restricted DSH token. On packaged Windows Desktop, the gateway
+   registers a non-secret marker for that reference if it is absent. It reads
+   the bearer from `tokenFile` and attaches it only to the validated Controller
+   `/v1` inference request with the admitted session and scope. Enter the
+   managed model explicitly in the profile. Keep the bearer out of the profile
+   and Desktop launcher; the Controller remains responsible for resource leases
+   and ownership checks.
 4. Review basic-compaction budgets against the verified model context window.
    Its summary route is also `local-strata` / `strata-core`. Keep the compaction
    and Skill isolation groups intact.

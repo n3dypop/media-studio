@@ -30,7 +30,7 @@ function Get-DshPath {
     }
     return $runtime
 }
-$dshRuntime=Get-DshPath
+$dshRuntime=if ($Service -ne 'ComfyUI') { Get-DshPath }
 
 function Test-LocalPort([int]$Port) {
     $client = [Net.Sockets.TcpClient]::new()
@@ -66,18 +66,22 @@ try {
     if (-not $ValidateOnly) {
         if ($Service -in @('All','DSH')) { $dshLaunchLock = Enter-DshLaunchLock $taskRoot; Assert-DefaultDshDesktopStopped }
         $childEnvironment = @{
-            DSH_HOME = Get-ProjectPath $settings.dshHome
-            DSH_TELEMETRY_MODE = 'DISABLED'
-            DSH_TELEMETRY_DISABLED = '1'
-            DSH_PERMISSION_MODE = 'workspace-write'
-            NPM_CONFIG_USERCONFIG = Get-ProjectPath 'config/npmrc'
-            NPM_CONFIG_CACHE = Get-ProjectPath 'runtime/cache/npm'
             HF_HOME = Get-ProjectPath 'runtime/cache/huggingface'
             HF_HUB_OFFLINE = '1'
             TRANSFORMERS_OFFLINE = '1'
             PYTHONNOUSERSITE = '1'
             PYTHONUTF8 = '1'
-            PATH = (Get-ProjectPath $settings.nodeDirectory) + ';' + (Join-Path $dshRuntime 'node_modules/.bin') + ';' + $env:PATH
+        }
+        if ($dshRuntime) {
+            $childEnvironment += @{
+                DSH_HOME = Get-ProjectPath $settings.dshHome
+                DSH_TELEMETRY_MODE = 'DISABLED'
+                DSH_TELEMETRY_DISABLED = '1'
+                DSH_PERMISSION_MODE = 'workspace-write'
+                NPM_CONFIG_USERCONFIG = Get-ProjectPath 'config/npmrc'
+                NPM_CONFIG_CACHE = Get-ProjectPath 'runtime/cache/npm'
+                PATH = (Get-ProjectPath $settings.nodeDirectory) + ';' + (Join-Path $dshRuntime 'node_modules/.bin') + ';' + $env:PATH
+            }
         }
         foreach ($key in $childEnvironment.Keys) {
             $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
@@ -88,7 +92,7 @@ try {
     $selected = if ($Service -eq 'All') { @('ComfyUI', 'DSH') } else { @($Service) }
     foreach ($name in $selected) {
         if ($name -eq 'ComfyUI') {
-            foreach ($field in @('comfyDirectory', 'comfyPythonExecutable', 'comfyUserDirectory', 'modelsDirectory', 'inputDirectory', 'outputDirectory', 'tempDirectory')) {
+            foreach ($field in @('comfyDirectory', 'comfyPythonExecutable', 'comfyUserDirectory', 'modelsDirectory', 'inputDirectory', 'outputDirectory')) {
                 if (-not [IO.Path]::IsPathFullyQualified([string]$settings.$field)) { throw "ComfyUI setting must be an absolute path: $field" }
                 $pathType = if ($field -eq 'comfyPythonExecutable') { 'Leaf' } else { 'Container' }
                 if (-not (Test-Path -LiteralPath $settings.$field -PathType $pathType)) { throw "ComfyUI path missing: $($settings.$field)" }
@@ -99,8 +103,14 @@ try {
             $port = [int]$settings.comfyPort
             $arguments = @('-s', $entry, '--disable-auto-launch', '--listen', '127.0.0.1', '--port', "$port", '--offline', '--enable-manager', '--models-directory', $settings.modelsDirectory, '--user-directory', $settings.comfyUserDirectory, '--input-directory', $settings.inputDirectory, '--output-directory', $settings.outputDirectory)
             # ComfyUI appends "temp" to this option. The configuration names the final folder.
+            if (-not [IO.Path]::IsPathFullyQualified([string]$settings.tempDirectory)) { throw 'ComfyUI tempDirectory must be an absolute path.' }
             $tempDirectory = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($settings.tempDirectory))
             if ((Split-Path $tempDirectory -Leaf) -ne 'temp') { throw 'ComfyUI tempDirectory must name the final folder ending in temp.' }
+            # ComfyUI owns the final directory and can remove it during cleanup.
+            # Validate its parent and any existing entry without precreating it.
+            if (-not (Test-Path -LiteralPath (Split-Path $tempDirectory -Parent) -PathType Container)) { throw 'ComfyUI tempDirectory parent is missing.' }
+            $tempEntry = Get-Item -LiteralPath $tempDirectory -Force -ErrorAction SilentlyContinue
+            if ($tempEntry -and (-not $tempEntry.PSIsContainer -or ($tempEntry.Attributes -band [IO.FileAttributes]::ReparsePoint))) { throw 'ComfyUI tempDirectory must be a regular directory.' }
             if ($tempDirectory -ne (Join-Path $workingDirectory 'temp')) {
                 $arguments += @('--temp-directory', (Split-Path $tempDirectory -Parent))
             }

@@ -17,3 +17,24 @@ for(const mode of ['web','desktop'])test(`${mode} gateway retains only the admit
  const b=gateway.stream({provider:'local-strata',model:'strata-core',sessionId:'second'},()=> (async function*(){const h=call(request('second'));assert.equal(h.get('x-dsh-session'),controllerSessionId('second',mode));assert.equal(h.get('x-dsh-scope'),'scope-2');yield 'b';})());
  try{const first=a.next();await entered.promise;const second=b.next();assert.equal(started.length,1);release.resolve();assert.equal((await first).value,'a');await a.return();assert.equal((await second).value,'b');await b.return();assert.deepEqual(ended,['scope-1','scope-2']);assert.throws(()=>call(request('second')),/scope could not be verified/);}finally{release.resolve();await a.return();await b.return();await gateway.dispose();}
 });
+
+test('a refused Controller connection allows a later explicit request after startup', async t => {
+  let calls = 0;
+  const gateway = await createGateway({on(){}}, {runtimeRoot:process.cwd()}, {
+    loadConfiguration:async()=>({controllerUrl:'http://127.0.0.1:3090',token:'synthetic'}),
+    loadDshLlmBindings:async()=>({LlmError:class extends Error{},IMAGE_OFFLOAD_REQUIRED_CODE:'fixture'}),
+    fetch:async(url,options)=>{
+      if (++calls === 1) throw new TypeError('fetch failed',{cause:{code:'ECONNREFUSED'}});
+      if (url.endsWith('/start')) return Response.json({scope:{id:'fixture-scope',sessionId:options.headers['X-DSH-Session']}});
+      return new Response(null,{status:204});
+    },
+  });
+  t.after(()=>gateway.dispose());
+  const request=()=>gateway.stream({provider:'local-strata',model:'strata-core',sessionId:'fixture'},async function*(){yield 'ready';});
+  await assert.rejects(request().next(),error=>error.uncertain===false&&/Controller is stopped/.test(error.message));
+  assert.equal(calls,1);
+  const retry=request();
+  assert.equal((await retry.next()).value,'ready');
+  await retry.return();
+  assert.equal(calls,3);
+});

@@ -12,6 +12,23 @@ export const name = 'local-genai-gateway';
 export const inject = ['llm','sessions','sessionPersistence'];
 export const Config=withControllerSessionNamespace(withDesktopPackagedRuntime(createRuntimeConfig({allowWorkspaceRoot:true,allowUnknown:true})),{allowUnknown:true});
 
+const desktopRouteRef = 'LOCAL_GENAI_DSH_TOKEN';
+const desktopRouteMarker = 'media-studio-local-route';
+
+function enableDesktopRoute(ctx) {
+  ctx.inject(['credentials'], async host => {
+    try {
+      // DSH requires a populated reference to list the configured model. The
+      // actual bearer stays in the gateway. Discovery can only see the marker.
+      if (!await host.credentials.resolve(desktopRouteRef)) {
+        await host.credentials.set(desktopRouteRef, desktopRouteMarker);
+      }
+    } catch {
+      host.logger.warn('Media Studio could not register the local Strata model reference in Desktop.');
+    }
+  });
+}
+
 export class CoreScopeError extends Error {
   constructor(message, { uncertain = false, requestId = null } = {}) {
     super(message);
@@ -120,6 +137,7 @@ export async function createGateway(ctx, config, dependencies = {}) {
     let actual;try{actual=new URL(request.baseURL);}catch{throw new CoreScopeError('Managed inference routing could not be verified.');}
     const sessionId=controllerSessionId(request.sessionId??'__auxiliary__',sessionMode);
     if(request.model!=='strata-core'||actual.origin!==settings.controllerUrl||!/^\/v1\/?$/.test(actual.pathname)||actual.search||actual.hash||actual.username||actual.password||!headerScope||headerScope.sessionId!==sessionId)throw new CoreScopeError('Managed inference scope could not be verified.');
+    if (desktopPackagedRuntime && sessionMode === 'desktop') headers.set('Authorization', `Bearer ${settings.token}`);
     headers.set('X-DSH-Session',headerScope.sessionId);
     headers.set('X-DSH-Scope',headerScope.id);
     observeScopeFeature(headerScope.sessionId,headerScope.id);
@@ -143,13 +161,18 @@ export async function createGateway(ctx, config, dependencies = {}) {
       });
       if (!response.ok) {
         await response.body?.cancel().catch(() => {});
-        throw new CoreScopeError(`The core scope request was rejected (HTTP ${response.status}); managed inference is closed.`, { uncertain: response.status >= 500, requestId: body.requestId ?? null });
+        const uncertain = response.status >= 500;
+        const detail = uncertain ? ' Reconcile the Controller state before retrying.' : '';
+        throw new CoreScopeError(`The core scope request was rejected (HTTP ${response.status}).${detail}`, { uncertain, requestId: body.requestId ?? null });
       }
       if (parseReceipt) return await readReceipt(response, signal);
       await response.body?.cancel().catch(() => {});
     } catch (error) {
       // Never echo a server body, token, URL, fetch error, or nested cause.
       if (error instanceof CoreScopeError) throw error;
+      if (error?.cause?.code === 'ECONNREFUSED' && path === '/api/core-scope/start') {
+        throw new CoreScopeError('Media Studio Controller is stopped. Start it in Media Studio service settings, then retry this request.');
+      }
       throw new CoreScopeError('The core scope response is unknown; managed inference is closed. Reconcile the controller state before reopening it.', { uncertain: true, requestId: body.requestId ?? null });
     }
   }
@@ -192,7 +215,7 @@ export async function createGateway(ctx, config, dependencies = {}) {
           if (!scope || typeof scope.id !== 'string' || !/^[\x21-\x7e]{1,256}$/.test(scope.id) || scope.sessionId !== sessionId) {
             throw new CoreScopeError('The core scope receipt is incomplete; managed inference is closed. Do not repeat the start request.', { uncertain: true, requestId });
           }
-        } catch (error) { close(error); throw error; }
+        } catch (error) { if (error.uncertain) close(error); throw error; }
         let ownsHeaderScope=false;
         try {
           if(headerScope){const error=new CoreScopeError('A managed inference scope is already active.');close(error);throw error;}
@@ -297,5 +320,6 @@ export async function createGateway(ctx, config, dependencies = {}) {
 
 export async function apply(ctx, config) {
   const gateway = await createGateway(ctx, config);
+  if (desktopPackagedRuntimeOption(config) && controllerSessionMode(config) === 'desktop') enableDesktopRoute(ctx);
   return () => gateway.dispose();
 }

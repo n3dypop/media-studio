@@ -66,5 +66,5 @@ test('media tools and Skills are Agent-preset children while provider examples r
   assert.ok(preset.body.includes(skills.body));assert.match(skills.body,/^\s*skills: true\s*$/m);assert.match(skills.body,/@deepseek-ai\/dsh-skill['"]?\s*$/m);assert.match(skills.body,/apps\/dsh-plugins\/local-genai\/skills\.mjs/);assert.match(skills.body,/@deepseek-ai\/dsh-tool-skill/);
   for(const match of bundle.matchAll(/^\s*name: (\.\/[^\s]+)\s*$/gm))assert.equal((await lstat(resolve(root,match[1]))).isFile(),true,match[1]);
   const provider=await text('examples/model-provider.patch.example.yml');
-  assert.match(provider,/^\s*local-strata:\s*$/m);assert.match(provider,/^\s*- id: strata-core\s*$/m);assert.match(provider,/^\s*displayName: Strata\s*$/m);assert.match(provider,/^\s*apiKeyEnv: MEDIA_STUDIO_DSH_TOKEN\s*$/m);assert.match(provider,/http:\/\/127\.0\.0\.1:\d+\/v1/);assert.doesNotMatch(provider,/^\s*apiKey:\s*\S+/m);
+  assert.match(provider,/^\s*local-strata:\s*$/m);assert.match(provider,/^\s*- id: strata-core\s*$/m);assert.match(provider,/^\s*displayName: Strata\s*$/m);assert.match(provider,/^\s*apiKeyEnv: LOCAL_GENAI_DSH_TOKEN\s*$/m);assert.match(provider,/http:\/\/127\.0\.0\.1:\d+\/v1/);assert.doesNotMatch(provider,/^\s*apiKey:\s*\S+/m);
 });
