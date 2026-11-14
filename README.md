@@ -59,24 +59,10 @@ message: check the DSH version and use the supported Host before trying again.
 Do not delete or migrate conversation history to resolve this compatibility
 error. ComfyUI and Strata must be installed separately. Python image/video
 helpers use the configured ComfyUI Python environment and its required libraries.
-Optional search uses a separately installed RustXNG. This source repository does
-not bundle those products, runtimes, Python environments or model weights.
-If `config/rustxng.json` is absent or sets `enabled: false`, search and page
-retrieval are disabled while conversation and image production remain available.
-Previously saved search records can still be viewed and cancelled. A present
-configuration without `enabled` remains enabled for existing installations;
-malformed or invalid enabled configuration is an error, not a silent opt-out.
-
-On Windows, an optional [native system probe](docs/native-probe.md) avoids
-repeated PowerShell startup for process identity, RAM and commit observations.
-Protected external search also requires the configured, hash-verified native
-probe to confirm the current DSH Host and its loopback listener. If the probe,
-Host ownership or confirmation is unavailable, search remains on hold while
-local conversation and image production remain available. Existing sessions
-without sufficient search ownership evidence require maintenance review; do
-not delete their history or retry an uncertain external request.
-Controller remains a Node.js service; the probe does not perform inference or
-replace resource ownership, cancellation or recovery rules.
+Install the products, runtimes, Python environments and model weights separately.
+Optional [search and page retrieval](docs/configuration.md#optional-search)
+use one configured RustXNG service and the Windows native probe. Web and
+Desktop can use the same search service through Controller.
 
 Clone the repository from your DSH checkout:
 
@@ -155,7 +141,10 @@ conversation attachment is a preview. After an interrupted delivery, reopen the
 existing run to recover its image without submitting a second generation.
 
 **Resources** opens **Media & Resources**, showing production stages, elapsed
-time and Strata/ComfyUI resource observations. Settings contain launch paths and
+time and Strata/ComfyUI resource observations. **Catalog** lists workflow
+dependencies, DSH availability, resource estimates and execution warnings. Use
+**Add to prompt** to draft a request for the selected workflow. For a managed
+workflow with a warning, confirm the same settings before it runs. Settings contain launch paths and
 managed Start, Stop, Restart and model-resource release operations. User
 acceptance/rejection and stopping apply to the selected production. Search terms
 and page retrieval require their own explicit approvals.

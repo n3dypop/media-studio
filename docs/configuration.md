@@ -111,7 +111,29 @@ An interrupted archive move can be reconciled against the saved hashes.
 
 ## Optional search
 
-RustXNG is a separately installed service. If the private runtime does not
+Web and Windows Desktop use the same Controller and RustXNG endpoint even
+though their DSH profiles, conversations and search records are scoped separately.
+In each profile enable the Media Studio preset, gateway and `studio-controls`.
+Desktop uses the namespace and packaged runtime settings in the installation guide.
+Use the search confirmation in the conversation to review the exact query and
+provider before sending it. Approval to fetch a returned page is separate.
+
+Install RustXNG externally from the [official releases](https://github.com/sahenjp/RustXNG/releases).
+For a managed installation, place the Windows binary in a versioned directory
+under the private runtime and check its size, SHA-256 and `--version`. The
+current launcher expects `http://127.0.0.1:29483`, DuckDuckGo as the only enabled
+engine, `approvalRequired: true` and `automaticPageFetch: false`. Use a settings
+file with `use_default_settings = false` and the one approved engine. Check
+`/healthz` and the engine list at `/config` locally before testing a search.
+Upstream provider errors can occur even when the local service is healthy.
+
+When upgrading, verify the new binary and settings before stopping the owned
+service. Wait for existing searches to finish, stop via `Stop-RustXNG.ps1`,
+update the pinned executable and hash in the private JSON, then start via
+`Start-RustXNG.ps1`. Preserve the old binary and JSON for rollback. Recheck local
+health, active engines and a separately approved search if available.
+
+If the private runtime does not
 contain `config/rustxng.json`, or that JSON explicitly has `"enabled": false`,
 the Controller and managed launcher start without it. Search and page retrieval
 are disabled, while existing records remain readable and cancellable; user-turn

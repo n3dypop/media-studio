@@ -4,7 +4,9 @@ This Host/client plugin owns the **Media & Resources** and **Catalog** tabs.
 Open them with **Resources** and **Catalog** in the conversation header or from
 the right-pane guide. The new conversation shows the buttons above its input.
 Catalog shows Strata startup settings, the loaded model, and ComfyUI workflows
-with dependency checks and any available DSH mapping. DSH's
+with dependency checks, DSH mappings, resource estimates and recorded warnings.
+See [resource forecasts and execution warnings](../../../docs/extensions.md#resource-forecasts-and-execution-warnings).
+DSH's
 official sidebar provides resizing, tabs, focus and narrow-screen layout; the
 plugin does not patch the Host DOM or overwrite another tab's width preference.
 
