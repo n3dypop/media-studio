@@ -40,6 +40,16 @@ idle, with no uncertain/conflicting operation. It does not install products,
 change model/input/output locations, or start/restart services. Reload the form
 when its revision is stale.
 
+**Settings → Strata** exposes context, prompt chunk, resident RAM, VRAM reserve,
+KV format, CPU expert workers, conversation cache and image-encoder limits. The
+Experimental Speed Projection section controls the default for new requests and
+the strength and inclusive layer range of the bundled vector. The vector is
+available for the supported Unsloth Qwen3.8-Flash-Next installation after its
+identity is verified. The off setting keeps the vector available and sets the
+Strata sampling default to off. Use **Save settings**, then **Restart** when
+the services are idle. The **ComfyUI** page manages its memory mode, node cache,
+sampler preview and VRAM reserve. Both DSH profiles share the engine settings.
+
 Operations use durable request IDs and receipts in
 `data/service-manager/operations.json`. The UI hides completed operation cards
 while retaining the journal for reconciliation. A failed or unknown operation

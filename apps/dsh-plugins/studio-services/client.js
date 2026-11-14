@@ -45,7 +45,13 @@ window.__ModuleLoader__.load({
       "tuning.option.minimal": "最小VRAM",
       "tuning.option.default": "空きRAMに応じて管理",
       "tuning.option.none": "オフ",
-      "tuning.option.latent2rgb": "Latent RGB"
+      "tuning.option.latent2rgb": "Latent RGB",
+      "tuning.memory": "パフォーマンスの詳細設定",
+      "tuning.vision": "画像エンコーダー",
+      "tuning.esp": "Experimental Speed Projection",
+      "tuning.espHelp": "拒否傾向など、モデルの応答に影響します。オフにすると既定で投影を無効にします。設定は再起動後に反映されます。",
+      "tuning.espUnavailable": "導入済みモデル、制御ベクトル、またはStrata側のサンプリング設定により、ここではESPを編集できません。",
+      "tuning.cacheHelp": "KV形式はVRAM消費量と精度に影響します。会話キャッシュはシステムRAMを使います。0で無効、空欄でStrataの既定値になります。"
     };
     // END GENERATED JAPANESE DICTIONARY
     Object.assign(en,{
@@ -56,6 +62,10 @@ window.__ModuleLoader__.load({
       'tuning.comfyHelp':'These options apply to the ComfyUI instance started by Media Studio.',
       'tuning.option.auto':'Automatic','tuning.option.low':'Low VRAM','tuning.option.minimal':'Minimum VRAM',
       'tuning.option.default':'RAM pressure cache','tuning.option.none':'Off','tuning.option.latent2rgb':'Latent RGB',
+      'tuning.memory':'Advanced performance','tuning.vision':'Image encoder','tuning.esp':'Experimental Speed Projection',
+      'tuning.espHelp':'Changes the model’s responses, including refusal behavior. Off disables projection by default. Saved changes take effect after restart.',
+      'tuning.espUnavailable':'The model, vector or Strata sampling override prevents editing ESP here.',
+      'tuning.cacheHelp':'KV format trades VRAM against precision. The conversation cache uses system RAM. Use 0 to disable it or clear the field to let Strata choose.',
     });
     const defaultText=key=>en[key]??key;
     const terminal=new Set(['completed','failed','cancelled','succeeded']);
@@ -66,6 +76,7 @@ window.__ModuleLoader__.load({
       .ss-operation-details{margin-top:9px}.ss-operation-details summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:11px}
       .ss-path-editor{margin-top:16px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l1)}.ss-path-editor h4{font-size:13px;font-weight:650;margin:0 0 8px}.ss-path-field{display:grid;gap:5px;margin:12px 0;font-size:11px;color:var(--dsw-alias-label-secondary)}.ss-path-field input{width:100%;min-width:0;box-sizing:border-box;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px}.ss-path-field input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.ss-path-field input:disabled{opacity:.65}
       .ss-path-field select{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px}
+      .ss-tuning-section{padding:10px 0;border-top:1px solid var(--dsw-alias-border-l2)}.ss-tuning-section>summary{cursor:pointer;font-weight:600}.ss-toggle{display:flex;align-items:center;gap:8px;margin:12px 0}
     `;
     const operationState=operation=>operation?.state??operation?.phase??operation?.status??null;
     const operationBusy=operation=>Boolean(operation&&!terminal.has(operationState(operation)));
@@ -202,6 +213,24 @@ window.__ModuleLoader__.load({
         {id:'reserveGiB',en:'VRAM reserve (GiB)',ja:'VRAM予約（GiB）',min:0.5,max:4,step:0.25,optional:true},
       ],
     };
+    const strataAdvanced=[
+      {section:'tuning.memory',help:'tuning.cacheHelp',fields:[
+        {id:'kv',en:'KV cache format',ja:'KVキャッシュ形式',choices:['fp16','int8','k8v4','q4_0'],optional:true},
+        {id:'poolWorkers',en:'CPU expert workers',ja:'エキスパートCPUワーカー数',min:1,max:32,step:1,optional:true},
+        {id:'conversationCacheMiB',en:'Conversation cache (MiB)',ja:'会話キャッシュ（MiB）',min:0,max:8192,step:1,optional:true},
+        {id:'conversationCacheSlots',en:'Parked conversations',ja:'会話キャッシュの最大件数',min:1,max:16,step:1,optional:true},
+      ]},
+      {section:'tuning.vision',fields:[
+        {id:'visionThreads',en:'Image encoder CPU threads',ja:'画像エンコーダーのCPUスレッド数',min:1,max:32,step:1,optional:true},
+        {id:'visionTokens',en:'Image token limit',ja:'画像あたりのトークン上限',min:256,max:4096,step:1,optional:true},
+      ]},
+      {section:'tuning.esp',help:'tuning.espHelp',fields:[
+        {id:'espEnabled',en:'Enable projection by default',ja:'既定で投影を有効にする',checkbox:true},
+        {id:'espScale',en:'Strength',ja:'投影の強度',min:0.1,max:1,step:0.1},
+        {id:'espFirstLayer',en:'First layer',ja:'開始レイヤー',min:1,max:47,step:1},
+        {id:'espLastLayer',en:'Last layer',ja:'終了レイヤー',min:1,max:47,step:1},
+      ]},
+    ];
     async function engineRequest(engine,body,{signal}={}){
       const headers=body?{'Content-Type':'application/json','X-Local-Studio-Service-Settings':'1'}:{};
       const proof=body?await desktopProof('engine-settings',signal):null;
@@ -229,18 +258,31 @@ window.__ModuleLoader__.load({
       const lifecycleBusy=lifecycle.posting||lifecycle.uncertain||Boolean(lifecycle.pending)||operationBusy(operation);
       const locale=t('tuning.locale');
       const running=current?.runningMatches===null?'tuning.unverified':current?.runningMatches?'tuning.applied':'tuning.pending';
+      const editable=field=>!busy&&!!current&&Object.hasOwn(draft,field.id)&&
+        (!field.id.startsWith('vision')||current.editable?.vision)&&
+        (!field.id.startsWith('esp')||current.values.espEnabled!==null&&(field.checkbox||draft.espEnabled===true));
+      const renderField=field=>{
+        const label=locale==='ja'?field.ja:field.en;
+        const props={'aria-label':label,disabled:!editable(field)};
+        if(field.checkbox)return h('label',{key:field.id,className:'ss-toggle'},
+          h('input',{...props,type:'checkbox',checked:draft[field.id]===true,onChange:e=>editor.change(field.id,e.target.checked)}),h('span',null,label));
+        const input={...props,value:draft[field.id]??'',onChange:e=>editor.change(field.id,e.target.value===''
+          ?(field.optional?null:''):field.choices?e.target.value:e.target.valueAsNumber)};
+        return h('label',{key:field.id,className:'ss-path-field'},h('span',null,label),field.choices
+          ?h('select',input,field.optional?h('option',{value:''},t('tuning.default')):null,
+            ...field.choices.map(value=>h('option',{key:value,value},en['tuning.option.'+value]?t('tuning.option.'+value):value)))
+          :h('input',{...input,type:'number',min:field.min,max:field.max,step:field.step,placeholder:field.optional?t('tuning.default'):undefined}));
+      };
       return h('section',{className:'studio-services ss-settings','data-engine-settings':engine},h('style',null,css),
         h('header',{className:'ss-heading'},h('h3',null,engine),h(Button,{type:'button',size:'sm',variant:'outline',disabled:busy,onClick:()=>void editor.reload()},t('refresh'))),
         h('p',{className:'ss-muted',role:'status'},t(!current?'paths.loading':current.state==='stopped'?'tuning.stopped':running)),
         h('p',{className:'ss-muted ss-detail'},t(engine==='Strata'?'tuning.contextHelp':'tuning.comfyHelp')),
-        ...engineFields[engine].map(field=>{
-          const label=locale==='ja'?field.ja:field.en;
-          const props={'aria-label':label,value:draft[field.id]??'',disabled:busy||!current,
-            onChange:e=>editor.change(field.id,field.choices?e.target.value:e.target.value===''?(field.optional?null:''):e.target.valueAsNumber)};
-          return h('label',{key:field.id,className:'ss-path-field'},h('span',null,label),field.choices
-            ?h('select',props,...field.choices.map(value=>h('option',{key:value,value},en['tuning.option.'+value]?t('tuning.option.'+value):value)))
-            :h('input',{...props,type:'number',min:field.min,max:field.max,step:field.step,placeholder:field.optional?t('tuning.default'):undefined}));
-        }),
+        ...engineFields[engine].map(renderField),
+        ...(engine==='Strata'&&Object.hasOwn(draft,'espEnabled')?strataAdvanced.map(({section,fields,help})=>
+          h('details',{key:section,className:'ss-tuning-section'},h('summary',null,t(section)),
+            help?h('p',{className:'ss-muted ss-detail'},t(help)):null,
+            section==='tuning.esp'&&current?.values.espEnabled===null?h('p',{className:'ss-muted ss-detail'},t('tuning.espUnavailable')):null,
+            ...fields.map(renderField))):[]),
         h('div',{className:'ss-buttons'},
           h(Button,{type:'button',size:'sm',variant:'primary',disabled:!changed||busy||lifecycleBusy||state.uncertain,onClick:()=>void editor.save()},t(state.saving?'paths.saving':'tuning.save')),
           h(Button,{type:'button',size:'sm',variant:'outline',disabled:changed||busy||lifecycleBusy||state.uncertain||!['stopped','running'].includes(service.state),
@@ -286,7 +328,8 @@ window.__ModuleLoader__.load({
       ctx.slots.inject('studio.monitor.services',()=>ctx.slots.register({name:'studio.monitor.services',id:'studio-services',order:10,locale:'studio.services',inject:()=>({controller})},ServicesView));
       ctx.slots.inject('settings.general.item',()=>ctx.slots.register({name:'settings.general.item',id:'studio-services-settings',order:14,locale:'studio.services',inject:()=>({controller,pathController,settings:true})},ServicesView));
       for(const [index,engine] of ['Strata','ComfyUI'].entries()){
-        const editor=createSettingsController({request:(body,options)=>engineRequest(engine,body,options),fields:engineFields[engine].map(field=>field.id)});
+        const fields=[...engineFields[engine],...(engine==='Strata'?strataAdvanced.flatMap(group=>group.fields):[])];
+        const editor=createSettingsController({request:(body,options)=>engineRequest(engine,body,options),fields:fields.map(field=>field.id)});
         ctx.effect(()=>()=>editor.dispose());
         ctx.slots.inject('settings.section',()=>ctx.slots.register({name:'settings.section',id:'studio-tuning-'+engine.toLowerCase(),order:36+index,label:()=>engine,locale:'studio.services',inject:()=>({controller,editor,engine})},EnginePage));
       }

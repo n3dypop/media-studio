@@ -83,7 +83,7 @@ export function engineSettingsHandler({root,adapter,manager,dshOrigin,writer=wri
       if(engine==='Strata'&&record.configSha256)runningMatches=record.configSha256===current.launchRevision;
       if(engine==='ComfyUI'&&record.comfyTuning)runningMatches=Object.keys(current.values).every(key=>record.comfyTuning[key]===current.values[key]);
     }
-    return {values:current.values,revision:current.revision,state,runningMatches};
+    return {values:current.values,editable:current.editable,revision:current.revision,state,runningMatches};
   }
   return async request=>{
     try{

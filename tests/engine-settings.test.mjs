@@ -44,6 +44,25 @@ test('ComfyUI persists only normalised tuning values and rejects injected argume
   assert.deepEqual(JSON.parse(await readFile(f.env)),{comfyPort:8189,unrelated:true,comfyTuning:values});
 });
 
+test('Strata optional tuning adds and removes only supported settings',async t=>{
+  const f=await fixture(t),initial=await readEngineSettings(f.root,'Strata');
+  assert.equal(initial.values.kv,null);
+  assert.equal(initial.values.espEnabled,null);
+  const changed={...initial.values,kv:'k8v4',poolWorkers:6,conversationCacheMiB:1024,conversationCacheSlots:2,visionThreads:4,visionTokens:512};
+  await assert.rejects(saveEngineSettings(f.root,'Strata',{expectedRevision:initial.revision,values:{...changed,kv:'--listen'}}),{status:400});
+  await assert.rejects(saveEngineSettings(f.root,'Strata',{expectedRevision:initial.revision,values:{...changed,espEnabled:true}}),{status:400});
+  await saveEngineSettings(f.root,'Strata',{expectedRevision:initial.revision,values:changed});
+  const saved=await readEngineSettings(f.root,'Strata');
+  assert.deepEqual(saved.values,changed);
+  assert.deepEqual(saved.config.value.args,[...f.source.args,'--kv','k8v4','--pool-workers','6','--conversation-cache-mib','1024','--conversation-cache-slots','2']);
+  const {context,prefill,residentGiB,reserveMiB}=saved.values;
+  await saveEngineSettings(f.root,'Strata',{expectedRevision:saved.revision,values:{context,prefill:'768',residentGiB,reserveMiB}});
+  const legacy=await readEngineSettings(f.root,'Strata');
+  assert.deepEqual(legacy.values,{...changed,prefill:'768'});
+  await saveEngineSettings(f.root,'Strata',{expectedRevision:legacy.revision,values:initial.values});
+  assert.deepEqual((await readEngineSettings(f.root,'Strata')).config.value,f.source);
+});
+
 test('settings route permits authenticated same-origin writes and projects pending settings without changing the running record',async t=>{
   const f=await fixture(t),current=await readEngineSettings(f.root,'Strata');
   const record=join(f.root,'runtime/Strata.json');

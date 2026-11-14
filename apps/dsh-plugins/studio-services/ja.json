@@ -16,5 +16,11 @@
     "tuning.option.minimal": "最小VRAM",
     "tuning.option.default": "空きRAMに応じて管理",
     "tuning.option.none": "オフ",
-    "tuning.option.latent2rgb": "Latent RGB"
+    "tuning.option.latent2rgb": "Latent RGB",
+    "tuning.memory": "パフォーマンスの詳細設定",
+    "tuning.vision": "画像エンコーダー",
+    "tuning.esp": "Experimental Speed Projection",
+    "tuning.espHelp": "拒否傾向など、モデルの応答に影響します。オフにすると既定で投影を無効にします。設定は再起動後に反映されます。",
+    "tuning.espUnavailable": "導入済みモデル、制御ベクトル、またはStrata側のサンプリング設定により、ここではESPを編集できません。",
+    "tuning.cacheHelp": "KV形式はVRAM消費量と精度に影響します。会話キャッシュはシステムRAMを使います。0で無効、空欄でStrataの既定値になります。"
   }
