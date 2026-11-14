@@ -23,9 +23,12 @@ continue to identify private operational data, separately from source paths.
 Moving source must never move or overwrite existing conversations, assets,
 models, output files, credentials or process receipts.
 
-Open **Catalog** from the right sidebar's new-tab menu. The workflow list supports
-keyword, media and operation filters. It shows local dependency checks and any
-managed DSH equivalent. The Strata section shows the model in the installation
+Select **Catalog** next to **Resources** in the conversation header to open its
+right-hand pane. The workflow list supports keyword, media and operation filters.
+**Add to prompt** appends a request to the current draft and keeps its attachments.
+Managed workflows insert the exact profile and operation. Standalone entries insert
+a request for ComfyUI inputs and instructions. Send the draft when it is ready.
+The Strata section shows the model in the installation
 record and the running service's observed load state. Refresh updates both
 sections without loading models or queuing workflows. **Media & Resources**
 continues to show usage, service controls and conversation jobs.

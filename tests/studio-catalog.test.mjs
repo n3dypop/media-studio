@@ -65,18 +65,58 @@ test('catalog forwarding is read-only and checks an existing conversation', asyn
   assert.deepEqual(calls, [['mine', ['media', 'video'], ['page', '2']]]);
 });
 
-test('DSH registers Catalog and Media & Resources as distinct sidebar tabs', async () => {
+async function monitorClient(react = {}) {
   let entry;
   const source = await readFile(new URL('../apps/dsh-plugins/studio-monitor/client.js', import.meta.url), 'utf8');
   runInNewContext(source, { window: { __ModuleLoader__: { load: value => { entry = value; } } } });
-  const client = entry.factory(id => id === 'react' ? {} : { Button() {} });
-  const tabs = [], slots = [];
+  return entry.factory(id => id === 'react' ? react : { Button() {} });
+}
+
+test('Catalog is beside Resources and opens its own pane in the mounted conversation', async () => {
+  const client = await monitorClient({
+    createElement: (type, props, ...children) => ({ type, props, children }),
+    useEffect() {}, useState: value => [value, () => {}],
+  });
+  const tabs = [], slots = [], opened = [], draftRequests = [];
+  let mounted = 'current', draftResult = 'applied';
+  const binding = { id: 'current' };
   client.apply({
     effect: fn => fn(),
     locale: { register() {}, bind: () => key => key },
+    sessions: { binding: id => { assert.equal(id, binding.id); return binding; } },
+    conversation: { input: { requestDraftInitialization: (target, options) => {
+      draftRequests.push({ target, ...options });
+      return draftResult;
+    } } },
+    sidebarRight: { mounted: { getSnapshot: () => mounted }, openTab: kind => opened.push(kind) },
     sidebarRightTabs: { register: tab => tabs.push(tab) },
     slots: { inject: (_, register) => register(), register: slot => slots.push(slot) },
   });
   assert.deepEqual(tabs.map(tab => tab.kind), ['studio-monitor', 'studio-catalog']);
-  assert.ok(slots.some(slot => slot.name === 'sidebar.right.pane.tab' && slot.key === 'studio-catalog'));
+  assert.equal(tabs[1].title(), 'Catalog');
+  const utility = slots.find(slot => slot.name === 'conversation.session.header.utilities');
+  const buttons = client.PaneButtons(utility.inject('current')).children.filter(Boolean);
+  assert.deepEqual(buttons.map(button => button.children[0].children[1]), ['Catalog', 'Resources']);
+  buttons.forEach(button => button.props.onClick());
+  assert.deepEqual(opened, ['studio-catalog', 'studio-monitor']);
+
+  const catalog = slots.find(slot => slot.name === 'sidebar.right.pane.tab' && slot.key === 'studio-catalog');
+  const { appendPrompt } = catalog.inject('current');
+  assert.equal(appendPrompt('workflow prompt'), true);
+  assert.deepEqual(draftRequests[0], { target: binding, prompt: 'workflow prompt', whenDraftExists: 'append' });
+  draftResult = 'blocked';
+  assert.equal(appendPrompt('blocked prompt'), false);
+  mounted = 'different';
+  assert.equal(appendPrompt('stale prompt'), false);
+  assert.equal(draftRequests.length, 2);
+});
+
+test('workflow prompts retain the exact managed profile and hand off standalone workflows', async () => {
+  const { workflowPrompt } = await monitorClient();
+  const row = { family: 'MOSS-Image', label: 'Text to image', mode: 't2i', dshProfile: 'moss-image-sft-int8-v1', state: 'static-ready' };
+  assert.match(workflowPrompt(row, true), /MOSS-Image \/ Text to image.*moss-image-sft-int8-v1.*t2i/);
+  assert.match(workflowPrompt({ ...row, state: 'dependencies-missing' }, false), /Check its dependencies and availability/);
+  const standalone = { family: 'ControlNet', label: 'Pose', file: 'ControlNet/pose.json' };
+  assert.match(workflowPrompt(standalone, true), /ComfyUI単体.*ControlNet\/pose\.json.*実行手順/);
+  assert.match(workflowPrompt(standalone, false), /^Explain the required inputs.*standalone ComfyUI/);
 });

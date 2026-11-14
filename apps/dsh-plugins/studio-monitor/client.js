@@ -8,7 +8,7 @@ window.__ModuleLoader__.load({
     const phase={planning:'制作条件を整理',ready:'フロー準備済み',generating:'生成中',awaiting_evaluation:'レビュー待ち',revising:'改善を計画',needs_user:'利用者の確認待ち',completed:'完了',failed:'失敗',cancelled:'停止済み',cancelling:'停止処理中',queued:'キュー待機',preparing:'実行準備',draining_core:'Strataを解放中',enhancing:'プロンプト調整',submitting:'ComfyUIへ送信',submission_unknown:'送信結果を確認中',saving:'成果物を保存中',releasing:'生成資源を解放中',restoring_core:'Strataへ復帰中',recovery_required:'復旧の確認が必要',needs_attention:'確認が必要'};
     const owner={core:'Strata',generator:'ComfyUI',enhancer:'エンハンサー',none:'割当なし',unknown:'確認できません',draining_core:'Strataから切替中',loading_core:'Strataを読込中',restoring_core:'Strataへ復帰中'};
     const css=`
-      body[data-studio-wallpaper][data-studio-wallpaper-scope='window'] [data-studio-monitor]{--sm-surface:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 84%,transparent)}
+      body[data-studio-wallpaper][data-studio-wallpaper-scope='window'] .studio-monitor{--sm-surface:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 84%,transparent)}
       .studio-monitor{--sm-accent:var(--dsw-alias-state-business-primary,var(--dsw-alias-link));--sm-muted:var(--dsw-alias-label-secondary);--sm-border:var(--dsw-alias-border-l1);--sm-surface:var(--dsw-alias-bg-layer-1);font-family:var(--dsh-font-family-text,inherit);color:var(--dsw-alias-label-primary);padding:16px;box-sizing:border-box;font-size:13px;line-height:1.55;min-width:0;overflow:auto;height:100%;scrollbar-gutter:stable}
       .studio-monitor *{box-sizing:border-box}.studio-monitor h2,.studio-monitor h3,.studio-monitor p{margin:0}.studio-monitor h2{font-size:18px;letter-spacing:-.02em}.studio-monitor h3{font-size:14px}.studio-monitor small{font-size:11px}.sm-heading,.sm-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.sm-heading{margin-bottom:16px}.sm-eyebrow{font-size:10px;letter-spacing:.12em;color:var(--sm-muted);font-weight:600}.sm-muted{color:var(--sm-muted);font-size:11px}.sm-card{border:1px solid var(--sm-border);border-radius:16px;padding:16px;margin-bottom:12px;background:var(--sm-surface);box-shadow:0 2px 10px color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent)}.sm-card-title{margin-bottom:14px!important}.sm-badge{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--sm-border);border-radius:999px;padding:3px 8px;white-space:nowrap;font-size:10px;line-height:1.4;color:var(--sm-muted);background:var(--dsw-alias-bg-layer-2)}.sm-badge[data-tone=active]{color:var(--sm-accent);border-color:color-mix(in srgb,var(--sm-accent) 32%,transparent);background:color-mix(in srgb,var(--sm-accent) 10%,var(--sm-surface))}.sm-badge[data-tone=success]{color:var(--dsw-alias-state-success-primary)}.sm-badge[data-tone=warning]{color:var(--dsw-alias-state-warn-primary)}.sm-badge[data-tone=error]{color:var(--dsw-alias-state-error-primary)}.sm-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}.sm-service+.sm-service{margin-top:16px;border-top:1px solid var(--sm-border);padding-top:16px}.sm-service-name{display:flex;align-items:center;gap:9px;font-weight:650}.sm-icon{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:1px solid var(--sm-border);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--sm-accent)}.sm-statgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.sm-stat{padding:9px 11px;border-radius:10px;background:var(--dsw-alias-bg-layer-2)}.sm-stat-label{font-size:10px;color:var(--sm-muted)}.sm-stat-value{font-size:14px;font-variant-numeric:tabular-nums;font-weight:600;margin-top:2px;overflow-wrap:anywhere}.sm-divider{height:1px;background:var(--sm-border);margin:16px 0}.sm-ownergrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:9px}.sm-owner{padding:10px;border-radius:11px;border:1px solid var(--sm-border);color:var(--sm-muted)}.sm-owner[data-active=true]{border-color:color-mix(in srgb,var(--sm-accent) 60%,var(--sm-border));color:var(--dsw-alias-label-primary);background:color-mix(in srgb,var(--sm-accent) 10%,var(--sm-surface))}.sm-owner strong{font-size:12px;display:block}.sm-meter{height:5px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden;margin-top:7px}.sm-meter-fill{height:100%;border-radius:999px;background:var(--sm-accent);transition:width .25s ease}.sm-meter[data-tone=warning] .sm-meter-fill{background:var(--dsw-alias-state-warn-primary)}.sm-meter[data-tone=error] .sm-meter-fill{background:var(--dsw-alias-state-error-primary)}.sm-usage+.sm-usage{margin-top:12px}.sm-numeric{font-variant-numeric:tabular-nums}.sm-joblist{list-style:none;padding:0;margin:0}.sm-job{border:1px solid var(--sm-border);border-radius:12px;padding:13px;margin-top:10px}.sm-job[data-active=true]{border-color:color-mix(in srgb,var(--sm-accent) 35%,var(--sm-border))}.sm-job-model{margin-top:7px!important;overflow-wrap:anywhere}.sm-job-label{font-size:12px;font-weight:650}.sm-stage-list{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:7px}.sm-stage{display:flex;align-items:center;gap:9px;font-size:11px;color:var(--sm-muted)}.sm-stage-marker{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--sm-border);border-radius:50%;width:17px;height:17px;font-size:10px;flex-shrink:0}.sm-stage[data-state=done] .sm-stage-marker{color:var(--dsw-alias-state-success-primary);border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 35%,var(--sm-border))}.sm-stage[data-state=current]{color:var(--sm-accent);font-weight:600}.sm-stage[data-state=current] .sm-stage-marker{background:color-mix(in srgb,var(--sm-accent) 14%,transparent);border-color:var(--sm-accent)}.sm-node{margin-top:13px;padding-top:11px;border-top:1px solid var(--sm-border)}.sm-empty{padding:16px 4px;text-align:center;color:var(--sm-muted)}.sm-empty svg{margin-bottom:7px}.sm-notice{border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 35%,var(--sm-border));background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 7%,var(--sm-surface));border-radius:10px;padding:10px 12px;margin-bottom:12px;color:var(--dsw-alias-label-primary);font-size:12px}.sm-settings{display:flex;align-items:center;gap:7px;color:var(--sm-muted);font-size:11px;margin:12px 0}.sm-settings input{accent-color:var(--sm-accent)}.sm-footnote{font-size:10px;color:var(--sm-muted);margin-top:9px!important}.sm-history{margin-top:12px}.sm-history summary{cursor:pointer;color:var(--sm-muted);font-size:11px;padding:6px 0}.sm-header-button{display:inline-flex;gap:6px;align-items:center}@media(max-width:400px){.studio-monitor{padding:10px}.sm-card{padding:12px}.sm-heading{flex-wrap:wrap}.sm-stat-value{font-size:12px}}@media(prefers-reduced-motion:reduce){.studio-monitor *{transition:none!important}}
       .studio-monitor{container-type:inline-size}.sm-resource-card{padding:14px}.sm-resource-card .sm-card-title{margin-bottom:12px!important}.sm-services{display:grid;gap:12px}.sm-services>.sm-service{min-width:0}.sm-services>.sm-service+.sm-service{margin-top:0;padding-top:12px}.sm-resource-card .sm-icon{width:26px;height:26px;border-radius:8px}.sm-resource-card .sm-statgrid{gap:8px;margin-top:8px}.sm-resource-card .sm-stat{padding:8px 10px}.sm-resource-card .sm-divider{margin:11px 0}.sm-system-grid{display:grid;gap:10px;margin-top:9px}.sm-system-grid>.sm-usage{margin-top:0}.sm-system-grid .sm-numeric{font-size:11px}.sm-resource-card .sm-ownergrid{margin-top:8px;gap:8px}.sm-resource-card .sm-owner{padding:7px 9px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:3px 7px}.sm-resource-card .sm-owner strong{font-size:11px}.sm-resource-card .sm-owner small{font-size:10px}.sm-resource-card .sm-history{margin-top:10px}.sm-scope-service+.sm-scope-service{margin-top:8px}.sm-scope-service strong{font-size:11px}.sm-resource-card .sm-scope-service .sm-footnote{margin-top:3px!important}
@@ -31,6 +31,7 @@ window.__ModuleLoader__.load({
       return h('svg',{width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:1.6,strokeLinecap:'round',strokeLinejoin:'round','aria-hidden':true},h('path',{d:paths[kind]??paths.activity}));
     }
     const badge=(text,tone='idle')=>h('span',{className:'sm-badge','data-tone':tone},h('span',{className:'sm-dot','aria-hidden':true}),text);
+    const stat=(label,value,title)=>h('div',{className:'sm-stat'},h('div',{className:'sm-stat-label'},label),h('div',{className:'sm-stat-value',title},value));
     function Meter({value,total,label,unit='bytes'}){
       const amount=ratio(value,total);if(amount===null)return h('p',{className:'sm-muted'},`${label}: 取得不可`);
       const percent=Math.round(amount*100);
@@ -74,8 +75,8 @@ window.__ModuleLoader__.load({
       return h('div',{className:'sm-service'},
         h('div',{className:'sm-row'},h('div',{className:'sm-service-name'},h('span',{className:'sm-icon'},h(Icon,{kind:icon})),label),badge(!fresh?'過去の観測':service?.status!=='observed'?'未取得':active?'割当中':'観測済み',!fresh?'warning':active?'active':'idle')),
         h('div',{className:'sm-statgrid'},
-          h('div',{className:'sm-stat'},h('div',{className:'sm-stat-label'},'RAM'),h('div',{className:'sm-stat-value',title:privateRam?'照合済みプロセスの専用常駐RAM':'照合済みプロセスのワーキングセット（共有ページを含む場合があります）'},bytes(privateRam?service.ram.residentPrivateBytes:service?.ram?.workingSetBytes))),
-          h('div',{className:'sm-stat'},h('div',{className:'sm-stat-label'},windows?'専用GPUメモリ':'VRAM'),h('div',{className:'sm-stat-value',title:partial&&known?'観測できたプロセスのみの値です。計測範囲の詳細を確認してください。':undefined},bytes(vram?.usedBytes)))));
+          stat('RAM',bytes(privateRam?service.ram.residentPrivateBytes:service?.ram?.workingSetBytes),privateRam?'照合済みプロセスの専用常駐RAM':'照合済みプロセスのワーキングセット（共有ページを含む場合があります）'),
+          stat(windows?'専用GPUメモリ':'VRAM',bytes(vram?.usedBytes),partial&&known?'観測できたプロセスのみの値です。計測範囲の詳細を確認してください。':undefined)));
     }
     function ServiceScope({label,service}){
       const vram=service?.vram,windows=vram?.source==='windows-gpu-process-memory',partial=vram?.complete===false;
@@ -157,22 +158,29 @@ window.__ModuleLoader__.load({
       },[visible,sessionId]);
       return h(Dashboard,{state,error,now,auto,onAutoChange:value=>{writeAuto(value);setAuto(value);},renderActions:typeof renderSlot==='function'?job=>renderSlot('studio.monitor.production.actions',{job}):undefined,renderSessionActions:typeof renderSlot==='function'?()=>renderSlot('studio.monitor.session.actions',{}):undefined,renderServices:typeof renderSlot==='function'?()=>renderSlot('studio.monitor.services',{visible}):undefined});
     }
-    function OpenMonitor({open,considerAuto}){
+    const CATALOG='studio-catalog', LOCALE='studio.catalog', CATALOG_TITLE='Catalog';
+    function PaneButtons({open,considerAuto}){
       const [error,setError]=useState('');
       useEffect(()=>{considerAuto();},[considerAuto]);
-      return h('div',null,h(Button,{variant:'outline',size:'sm',type:'button',title:'Open Media & Resources',onClick:()=>{try{open();setError('');}catch{setError('右ペインを開けません。会話を選び直してください。');}}},h('span',{style:{display:'inline-flex',alignItems:'center',gap:6}},h(Icon,{}),'Resources')),error?h('span',{role:'status'},error):null);
+      const button=(kind,label,title,icon)=>h(Button,{variant:'outline',size:'sm',type:'button',title,onClick:()=>{
+        try{open(kind);setError('');}catch{setError('右ペインを開けません。会話を選び直してください。');}
+      }},h('span',{style:{display:'inline-flex',alignItems:'center',gap:6}},h(Icon,{kind:icon}),label));
+      return h('div',{style:{display:'flex',alignItems:'center',gap:6}},
+        button(CATALOG,CATALOG_TITLE,'Open Catalog','layers'),button(KIND,'Resources','Open Media & Resources','activity'),
+        error?h('span',{role:'status'},error):null);
     }
-    const CATALOG='studio-catalog', LOCALE='studio.catalog';
     const dictionaries={
-      ja:{title:'カタログ',description:'ComfyUIのワークフローとStrataのモデル',refresh:'更新',core:'Strata モデル',configured:'設定されたモデル',running:'稼働中のモデル',loaded:'ロード済み',unloaded:'未ロード',unknown:'確認できません',matched:'起動時の設定と一致',changed:'起動時の設定から変更あり',repository:'配布元',quantization:'量子化',weights:'重みファイル',revision:'配布版',context:'コンテキスト',engine:'エンジン',vision:'画像入力',available:'利用可能',off:'無効',workflows:'ComfyUI ワークフロー',search:'モデル名・キーワード',searchButton:'検索',media:'メディア',mode:'操作',all:'すべて',image:'画像',video:'動画',ready:'依存関係確認済み',missing:'不足あり',invalid:'テンプレート確認不可',standalone:'ComfyUI単体',managed:'DSH管理',details:'保存場所・詳細',models:'不足モデル',nodes:'不足ノード',prev:'前へ',next:'次へ',loading:'読み込み中…',error:'取得できません。サービスの状態を確認して更新してください。',empty:'該当するワークフローはありません。',unconfigured:'ワークフロー一覧が設定されていません。',checked:'取得時刻',scope:'依存関係の確認結果を表示します。実行可否はモデルと空き資源に依存します。'},
-      en:{title:'Catalog',description:'ComfyUI workflows and Strata model',refresh:'Refresh',core:'Strata model',configured:'Configured model',running:'Running model',loaded:'Loaded',unloaded:'Unloaded',unknown:'Unavailable',matched:'Matches startup configuration',changed:'Configuration changed since startup',repository:'Source',quantization:'Quantization',weights:'Weights file',revision:'Revision',context:'Context',engine:'Engine',vision:'Image input',available:'Available',off:'Disabled',workflows:'ComfyUI workflows',search:'Model or keyword',searchButton:'Search',media:'Media',mode:'Operation',all:'All',image:'Image',video:'Video',ready:'Dependencies found',missing:'Missing dependencies',invalid:'Template unavailable',standalone:'Standalone ComfyUI',managed:'Managed by DSH',details:'Location and details',models:'Missing models',nodes:'Missing nodes',prev:'Previous',next:'Next',loading:'Loading…',error:'Unable to load. Check the service and refresh.',empty:'No matching workflows.',unconfigured:'The workflow library is unconfigured.',checked:'Checked at',scope:'Shows detected dependencies. Execution depends on the model and available resources.'},
+      ja:{description:'ComfyUIのワークフローとStrataのモデル',refresh:'更新',core:'Strata モデル',configured:'設定されたモデル',running:'稼働中のモデル',loaded:'ロード済み',unloaded:'未ロード',unknown:'確認できません',matched:'起動時の設定と一致',changed:'起動時の設定から変更あり',repository:'配布元',quantization:'量子化',weights:'重みファイル',revision:'配布版',context:'コンテキスト',engine:'エンジン',vision:'画像入力',available:'利用可能',off:'無効',workflows:'ComfyUI ワークフロー',search:'モデル名・キーワード',searchButton:'検索',media:'メディア',mode:'操作',all:'すべて',image:'画像',video:'動画',ready:'依存関係確認済み',missing:'不足あり',invalid:'テンプレート確認不可',standalone:'ComfyUI単体',managed:'DSH管理',details:'保存場所・詳細',models:'不足モデル',nodes:'不足ノード',prev:'前へ',next:'次へ',loading:'読み込み中…',error:'取得できません。サービスの状態を確認して更新してください。',empty:'該当するワークフローはありません。',unconfigured:'ワークフロー一覧が設定されていません。',checked:'取得時刻',scope:'実行可否はモデルと空き資源に依存します。'},
+      en:{description:'ComfyUI workflows and Strata model',refresh:'Refresh',core:'Strata model',configured:'Configured model',running:'Running model',loaded:'Loaded',unloaded:'Unloaded',unknown:'Unavailable',matched:'Matches startup configuration',changed:'Configuration changed since startup',repository:'Source',quantization:'Quantization',weights:'Weights file',revision:'Revision',context:'Context',engine:'Engine',vision:'Image input',available:'Available',off:'Disabled',workflows:'ComfyUI workflows',search:'Model or keyword',searchButton:'Search',media:'Media',mode:'Operation',all:'All',image:'Image',video:'Video',ready:'Dependencies found',missing:'Missing dependencies',invalid:'Template unavailable',standalone:'Standalone ComfyUI',managed:'Managed by DSH',details:'Location and details',models:'Missing models',nodes:'Missing nodes',prev:'Previous',next:'Next',loading:'Loading…',error:'Unable to load. Check the service and refresh.',empty:'No matching workflows.',unconfigured:'The workflow library is unconfigured.',checked:'Checked at',scope:'Execution depends on the model and available resources.'},
     };
     Object.assign(dictionaries.ja,{
+      addPrompt:'プロンプトに追加',promptAdded:'入力欄に追加しました。',promptBlocked:'入力欄に追加できません。会話と入力欄の状態を確認してください。',
       resourceUse:'予想リソース消費量',modelDisk:'モデルのディスク容量',peakVram:'VRAM増加・観測最大',
       peakRam:'ComfyUIの物理RAM・観測最大',ramBudget:'Strataの常駐RAM設定',unmeasured:'未測定',
       sample:'測定条件',resourceNote:'既定フローでの参考値です。モデル、寸法、同時作業によって変動します。',
     });
     Object.assign(dictionaries.en,{
+      addPrompt:'Add to prompt',promptAdded:'Added to the message draft.',promptBlocked:'Could not add to the draft. Check the conversation and composer.',
       resourceUse:'Expected resource use',modelDisk:'Model files on disk',peakVram:'Largest sampled VRAM increase',
       peakRam:'Peak sampled ComfyUI working set',ramBudget:'Strata resident RAM setting',unmeasured:'Unmeasured',
       sample:'Measurement conditions',resourceNote:'Reference values for the default workflow. Usage varies with models, dimensions and concurrent work.',
@@ -183,13 +191,13 @@ window.__ModuleLoader__.load({
       en:['Text to image','Image to image','Image editing','Layout','Depth control','Background removal','Upscale','Text to video','Image to video','Pose control','Mixed ControlNet'],
     };
     const catalogCss=`
-      .ms-catalog{display:grid;align-content:start;gap:12px;overflow:auto;height:100%;padding:12px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5;min-width:0}
-      .ms-catalog *{box-sizing:border-box}.ms-catalog h2,.ms-catalog h3,.ms-catalog p{margin:0}.ms-catalog h2{font-size:15px}.ms-catalog h3{font-size:13px}
-      .msc-panel,.msc-row{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:10px;min-width:0}.msc-panel{display:grid;gap:9px}.msc-row{display:grid;gap:5px;overflow-wrap:anywhere}
-      .msc-line,.msc-filters{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.msc-sub{color:var(--dsw-alias-label-secondary);font-size:11px}
-      .msc-fields{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;margin:0}.msc-fields dt{color:var(--dsw-alias-label-secondary)}.msc-fields dd{margin:0;overflow-wrap:anywhere}
+      .msc-content{display:grid;gap:10px;min-width:0}.msc-content .sm-statgrid{margin-top:0}
+      .msc-line,.msc-filters{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.msc-badges{display:flex;gap:5px;flex-wrap:wrap}
+      .msc-fields{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,3fr);gap:4px 8px;margin:6px 0;font-size:11px;overflow-wrap:anywhere}.msc-fields dt{color:var(--sm-muted)}.msc-fields dd{margin:0}
       .msc-search{display:flex;gap:6px}.msc-search input{flex:1;min-width:0}.msc-filters label{display:grid;gap:3px;flex:1 1 100px;min-width:0}
-      .ms-catalog input,.ms-catalog select{color:inherit;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:5px 6px;font:inherit;width:100%}.ms-catalog summary{cursor:pointer}.ms-catalog ul{margin:3px 0;padding-left:18px}
+      .ms-catalog input,.ms-catalog select{color:inherit;background:var(--sm-surface);border:1px solid var(--sm-border);border-radius:8px;padding:5px 8px;font:inherit;width:100%;min-width:0}
+      .msc-row{display:grid;gap:8px;overflow-wrap:anywhere}.msc-row h4{font-size:13px;margin:0}.msc-row .sm-history{margin-top:0}.msc-row .sm-history summary{padding:2px 0}.msc-row ul{margin:3px 0;padding-left:18px}
+      .msc-action{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
     `;
     function useCatalogData(path,query,enabled,revision){
       const [result,setResult]=useState(null);
@@ -214,13 +222,16 @@ window.__ModuleLoader__.load({
       const config=data.configured, live=data.running;
       const line=(key,value)=>value==null?null:[h('dt',{key:key+'-label'},t(key)),h('dd',{key},value)];
       const format=value=>value==null?null:Number(value).toLocaleString();
-      return h('div',{className:'msc-panel'},
-        h('div',{className:'msc-line'},h('h3',null,t('running')),h('span',{role:'status'},t(live?.state??'unknown'))),
-        live?h('dl',{className:'msc-fields'},line('running',live.model),line('engine',live.engine),line('context',format(live.context)),line('vision',t(live.vision))):null,
-        h('h3',null,t('configured')),
-        config?h('dl',{className:'msc-fields'},line('running',config.model),line('repository',config.repository),line('quantization',config.quantization),line('weights',config.weights),line('revision',config.revision),line('context',format(config.context)),line('ramBudget',gib(config.residentRamBudgetBytes))):h('p',{className:'msc-sub'},t('unknown')),
-        data.configurationMatch!=null?h('p',{className:'msc-sub'},t(data.configurationMatch?'matched':'changed')):null,
-        data.observedAt?h('p',{className:'msc-sub'},`${t('checked')} ${clock(data.observedAt)}`):null);
+      return h('div',{className:'msc-content'},
+        h('div',{className:'sm-statgrid'},
+          stat(t('configured'),config?.model??t('unknown')),
+          stat(t('running'),live?.model??t(live?.state??'unknown'))),
+        live?h('div',{className:'msc-badges',role:'status'},badge(t(live.state),live.state==='loaded'?'success':'idle'),
+          data.configurationMatch!=null?badge(t(data.configurationMatch?'matched':'changed'),data.configurationMatch?'idle':'warning'):null):null,
+        config||live?h('details',{className:'sm-history'},h('summary',null,t('details')),h('dl',{className:'msc-fields'},
+          line('engine',live?.engine),line('context',format(live?.context??config?.context)),line('vision',live?.vision?t(live.vision):null),
+          line('repository',config?.repository),line('quantization',config?.quantization),line('weights',config?.weights),line('revision',config?.revision),line('ramBudget',gib(config?.residentRamBudgetBytes)))):null,
+        data.observedAt?h('p',{className:'sm-footnote'},`${t('checked')} ${clock(data.observedAt)}`):null);
     }
     function WorkflowResources({data,t}){
       const runtime=data?.runtime;
@@ -231,21 +242,37 @@ window.__ModuleLoader__.load({
       ];
       if(runtime)fields.push(['sample',[`${runtime.width}×${runtime.height}`,runtime.frames?`${runtime.frames}f`:null,
         runtime.gpu,`${runtime.sampleIntervalMs} ms`].filter(Boolean).join(' · ')]);
-      return h('details',null,h('summary',null,t('resourceUse')),
+      return h('details',{className:'sm-history'},h('summary',null,t('resourceUse')),
         h('dl',{className:'msc-fields'},...fields.flatMap(([key,value])=>[h('dt',{key:key+'-label'},t(key)),h('dd',{key},value)])),
-        h('p',{className:'msc-sub'},t('resourceNote')));
+        h('p',{className:'sm-muted'},t('resourceNote')));
     }
-    function WorkflowRow({row,t,operation}){
+    function workflowPrompt(row,ja){
+      const name=[row.family,row.label].filter(Boolean).join(' / ');
+      if(row.dshProfile){
+        const check=row.state!=='static-ready';
+        return ja
+          ? `ComfyUIワークフロー「${name}」を使いたいです。モデルプロファイルは ${row.dshProfile}、操作は ${row.mode} を指定します。${check?'実行前に依存関係と利用可否を確認してください。':''}`
+          : `Use the ComfyUI workflow “${name}” with model profile ${row.dshProfile} and operation ${row.mode}.${check?' Check its dependencies and availability before running it.':''}`;
+      }
+      return ja
+        ? `ComfyUI単体のワークフロー「${name}」（${row.file}）について、必要な入力素材・依存関係と実行手順を教えてください。`
+        : `Explain the required inputs, dependencies and steps for the standalone ComfyUI workflow “${name}” (${row.file}).`;
+    }
+    function WorkflowRow({row,t,operation,onSelect}){
+      const [feedback,setFeedback]=useState('');
       const state={'static-ready':'ready','dependencies-missing':'missing'}[row.state]??'invalid';
       const missing=(label,values)=>values?.length?h('div',null,t(label),h('ul',null,...values.map(value=>h('li',{key:value},value)))):null;
-      return h('article',{className:'msc-row'},
-        h('h3',null,row.label),
-        h('p',{className:'msc-sub'},[operation(row.mode),t(row.dshProfile?'managed':'standalone'),t(state)].join(' · ')),
+      return h('article',{className:'sm-job msc-row'},
+        h('div',null,row.family&&row.family!==row.label?h('p',{className:'sm-muted'},row.family):null,h('h4',null,row.label)),
+        h('div',{className:'msc-badges'},badge(operation(row.mode)),badge(t(row.dshProfile?'managed':'standalone'),row.dshProfile?'active':'idle'),
+          badge(t(state),state==='ready'?'success':'warning')),
+        h('div',{className:'msc-action'},h(Button,{type:'button',size:'sm',variant:'outline',onClick:()=>setFeedback(onSelect(row)?'promptAdded':'promptBlocked')},t('addPrompt')),
+          h('span',{className:'sm-muted',role:'status'},feedback?t(feedback):'')),
         h(WorkflowResources,{data:row.resourceUsage,t}),
-        h('details',null,h('summary',null,t('details')),h('p',null,row.file),
+        h('details',{className:'sm-history'},h('summary',null,t('details')),h('p',null,row.file),
           row.dshProfile?h('p',null,row.dshProfile):null,missing('models',row.missingModels),missing('nodes',row.missingNodes)));
     }
-    function Catalog({sessionId,useTabInfo,t=key=>dictionaries.en[key]}){
+    function Catalog({sessionId,useTabInfo,appendPrompt,t=key=>dictionaries.en[key]}){
       const visible=useTabInfo().tab.visible;
       const [draft,setDraft]=useState(''),[query,setQuery]=useState(''),[media,setMedia]=useState(''),[mode,setMode]=useState('');
       const [page,setPage]=useState(1),[revision,setRevision]=useState(0);
@@ -259,47 +286,55 @@ window.__ModuleLoader__.load({
       const core=useCatalogData('/api/local-studio/core-model',scope,enabled,revision);
       const list=useCatalogData('/api/local-studio/catalog',filters,enabled,revision);
       const last=Math.max(1,Math.ceil((list.value?.total??0)/(list.value?.limit??12)));
-      const operation=value=>modeLabels[t('title')===dictionaries.ja.title?'ja':'en'][modes.indexOf(value)]??value;
-      const status=state=>h('p',{role:state.error?'alert':'status',className:'msc-sub'},t(state.error?'error':'loading'));
+      const ja=t('mode')===dictionaries.ja.mode;
+      const operation=value=>modeLabels[ja?'ja':'en'][modes.indexOf(value)]??value;
+      const status=state=>h('p',{role:state.error?'alert':'status',className:state.error?'sm-notice':'sm-muted'},t(state.error?'error':'loading'));
       const button=(key,onClick,disabled=false)=>h(Button,{type:'button',size:'sm',variant:'outline',onClick,disabled},t(key));
       const select=(label,value,change,options,caption)=>h('label',null,t(label),h('select',{value,onChange:event=>{change(event.target.value);setPage(1);}},
         h('option',{value:''},t('all')),...options.map(item=>h('option',{value:item,key:item},caption(item)))));
-      return h('div',{className:'ms-catalog','data-studio-catalog':true},h('style',null,catalogCss),
-        h('div',{className:'msc-line'},h('h2',null,t('core')),button('refresh',()=>setRevision(n=>n+1),core.loading&&list.loading)),
-        core.value?h(CoreModel,{data:core.value,t}):status(core),
-        h('section',{className:'msc-panel'},h('h2',null,t('workflows')),
-          h('form',{className:'msc-search',onSubmit:event=>{event.preventDefault();setQuery(draft.trim());setPage(1);}},
+      return h('div',{className:'studio-monitor ms-catalog','data-studio-catalog':true},h('style',null,css+catalogCss),
+        h('header',{className:'sm-heading'},h('div',null,h('div',{className:'sm-eyebrow'},'MEDIA STUDIO'),h('h2',null,CATALOG_TITLE)),
+          button('refresh',()=>setRevision(n=>n+1),core.loading&&list.loading)),
+        h('section',{className:'sm-card'},h('h3',{className:'sm-card-title'},t('core')),core.value?h(CoreModel,{data:core.value,t}):status(core)),
+        h('section',{className:'sm-card'},h('h3',{className:'sm-card-title'},t('workflows')),
+          h('div',{className:'msc-content'},h('form',{className:'msc-search',onSubmit:event=>{event.preventDefault();setQuery(draft.trim());setPage(1);}},
             h('input',{type:'search',value:draft,maxLength:80,placeholder:t('search'),'aria-label':t('search'),onChange:event=>setDraft(event.target.value)}),
             h(Button,{type:'submit',size:'sm',variant:'outline'},t('searchButton'))),
-          h('div',{className:'msc-filters'},select('media',media,setMedia,['image','video'],t),select('mode',mode,setMode,modes,operation)),
-          list.value?h('div',{className:'msc-panel'},...list.value.workflows.map(row=>h(WorkflowRow,{key:row.id,row,t,operation})),
-            list.value.workflows.length===0?h('p',{role:'status'},t(list.value.state==='unconfigured'?'unconfigured':'empty')):null,
-            page>1||last>1?h('nav',{className:'msc-line','aria-label':t('workflows')},button('prev',()=>setPage(n=>n-1),page===1),
-              h('span',{className:'msc-sub'},`${page} / ${last}`),button('next',()=>setPage(n=>n+1),page>=last)):null):status(list),
-          h('p',{className:'msc-sub'},t('scope'))));
+          h('div',{className:'msc-filters'},select('media',media,setMedia,['image','video'],t),select('mode',mode,setMode,modes,operation))),
+          list.value?h('div',null,...list.value.workflows.map(row=>h(WorkflowRow,{key:row.id,row,t,operation,onSelect:item=>appendPrompt(workflowPrompt(item,ja))})),
+            list.value.workflows.length===0?h('p',{className:'sm-empty',role:'status'},t(list.value.state==='unconfigured'?'unconfigured':'empty')):null,
+            page>1||last>1?h('nav',{className:'msc-line sm-history','aria-label':t('workflows')},button('prev',()=>setPage(n=>n-1),page===1),
+              h('span',{className:'sm-muted'},`${page} / ${last}`),button('next',()=>setPage(n=>n+1),page>=last)):null):status(list),
+          h('p',{className:'sm-footnote'},t('scope'))));
     }
     function apply(ctx){
       const considered=new Set();
+      const mounted=sessionId=>ctx.sidebarRight.mounted.getSnapshot()===sessionId;
       ctx.effect(()=>ctx.sidebarRightTabs.register({id:ID,kind:KIND,keepMounted:true,title:()=> 'Media & Resources',guide:[{id:ID,order:20,title:()=> 'Media & Resources',description:()=> 'Strata・ComfyUIの資源と、この会話の制作工程',icon:Icon}]}));
       ctx.effect(()=>ctx.locale.register(LOCALE,dictionaries));
-      const catalogText=key=>ctx.locale.bind(LOCALE)(key);
-      ctx.effect(()=>ctx.sidebarRightTabs.register({id:CATALOG,kind:CATALOG,title:()=>catalogText('title'),
-        guide:[{id:CATALOG,order:21,title:()=>catalogText('title'),description:()=>catalogText('description'),icon:()=>h(Icon,{kind:'layers'})}]}));
+      ctx.effect(()=>ctx.sidebarRightTabs.register({id:CATALOG,kind:CATALOG,title:()=>CATALOG_TITLE,
+        guide:[{id:CATALOG,order:21,title:()=>CATALOG_TITLE,description:()=>ctx.locale.bind(LOCALE)('description'),icon:()=>h(Icon,{kind:'layers'})}]}));
       ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({
-        name:'sidebar.right.pane.tab',key:CATALOG,locale:LOCALE,inject:sessionId=>({sessionId}),
+        name:'sidebar.right.pane.tab',key:CATALOG,locale:LOCALE,inject:sessionId=>({sessionId,appendPrompt:prompt=>{
+          if(!mounted(sessionId))return false;
+          try{
+            const binding=ctx.sessions.binding(sessionId);
+            return Boolean(binding&&ctx.conversation.input.requestDraftInitialization(binding,{prompt,whenDraftExists:'append'})==='applied');
+          }catch{return false;}
+        }}),
       },Catalog));
       ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({name:'sidebar.right.pane.tab',key:ID,children:{'studio.monitor.production.actions':{kind:'list',scope:'session'},'studio.monitor.session.actions':{kind:'list',scope:'session'},'studio.monitor.services':{kind:'list',scope:'session'}},inject:sessionId=>({sessionId})},Monitor));
       ctx.slots.inject('conversation.session.header.utilities',()=>ctx.slots.register({name:'conversation.session.header.utilities',id:ID,order:-20,inject:sessionId=>({
-        open:()=>{if(ctx.sidebarRight.mounted.getSnapshot()!==sessionId)throw Error('Conversation changed');ctx.sidebarRight.openTab(KIND);},
+        open:kind=>{if(!mounted(sessionId))throw Error('Conversation changed');ctx.sidebarRight.openTab(kind);},
         considerAuto:()=>{
-          if(considered.has(sessionId)||ctx.sidebarRight.mounted.getSnapshot()!==sessionId)return;
+          if(considered.has(sessionId)||!mounted(sessionId))return;
           considered.add(sessionId);if(considered.size>256)considered.delete(considered.values().next().value);
           if(!readAuto()||!window.matchMedia?.('(min-width: 1100px)').matches)return;
           try{const current=ctx.sidebarRight.active();if(!ctx.sidebarRight.isExpanded()&&(!current||current.kind==='guide'))ctx.sidebarRight.openTab(KIND);}catch{}
         },
-      })},OpenMonitor));
+      })},PaneButtons));
       ctx.effect(()=>()=>considered.clear());
     }
-    return {inject:['slots','sidebarRight','sidebarRightTabs','locale'],apply,Monitor,OpenMonitor,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog};
+    return {inject:['slots','sidebarRight','sidebarRightTabs','locale','sessions','conversation'],apply,Monitor,PaneButtons,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog,workflowPrompt};
   },
 });
