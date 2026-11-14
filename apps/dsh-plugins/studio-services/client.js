@@ -7,6 +7,7 @@ window.__ModuleLoader__.load({
     const PATH='/api/local-studio/services',PENDING_KEY='studio-services.pending.v1';
     const SERVICES=['Strata','ComfyUI','Controller'],ACTIONS=['start','stop','restart','unload'];
     const SETTINGS_PATH='/api/local-studio/service-settings';
+    const ENGINE_SETTINGS_PATH='/api/local-studio/engine-settings';
     const PATH_FIELDS=[['comfyDirectory','ComfyUI folder'],['comfyPythonExecutable','ComfyUI Python'],['strataPythonExecutable','Strata Python'],['controllerNodeExecutable','Controller Node.js']];
     const en={title:'Services','paths.title':'Service paths',start:'Start',stop:'Stop',restart:'Restart',unload:'Unload',refresh:'Refresh',checking:'Checking…',checkReceipt:'Check receipt',retrySameRequest:'Retry same request','paths.comfyDirectory':'ComfyUI folder','paths.comfyPythonExecutable':'ComfyUI Python','paths.strataPythonExecutable':'Strata Python','paths.controllerNodeExecutable':'Controller Node.js','paths.save':'Save paths','paths.saving':'Saving…','paths.reload':'Reload paths','paths.loading':'Loading…'};
     // BEGIN GENERATED JAPANESE DICTIONARY
@@ -28,9 +29,34 @@ window.__ModuleLoader__.load({
       "paths.save": "パスを保存",
       "paths.saving": "保存中…",
       "paths.reload": "パスを再読み込み",
-      "paths.loading": "読み込み中…"
+      "paths.loading": "読み込み中…",
+      "tuning.locale": "ja",
+      "tuning.save": "設定を保存",
+      "tuning.saved": "保存しました。次回のサービス起動から使用します。",
+      "tuning.default": "システム既定",
+      "tuning.stopped": "サービス停止中",
+      "tuning.applied": "保存した設定で稼働中",
+      "tuning.pending": "保存済み・再起動で反映",
+      "tuning.unverified": "現在の起動設定を確認できません",
+      "tuning.contextHelp": "両版のDSHモデルの上限はこの値以下にしてください。上限を上げるとVRAM使用量が増えることがあります。",
+      "tuning.comfyHelp": "Media Studioが起動するComfyUIに適用します。",
+      "tuning.option.auto": "自動",
+      "tuning.option.low": "低VRAM",
+      "tuning.option.minimal": "最小VRAM",
+      "tuning.option.default": "空きRAMに応じて管理",
+      "tuning.option.none": "オフ",
+      "tuning.option.latent2rgb": "Latent RGB"
     };
     // END GENERATED JAPANESE DICTIONARY
+    Object.assign(en,{
+      'tuning.locale':'en','tuning.save':'Save settings','tuning.saved':'Saved for the next service start.',
+      'tuning.default':'System default','tuning.stopped':'Service stopped','tuning.applied':'Running with the saved settings',
+      'tuning.pending':'Saved settings are pending a restart','tuning.unverified':'Running settings could not be verified',
+      'tuning.contextHelp':'Keep both DSH model profiles at or below this capacity. Increasing it can use more VRAM.',
+      'tuning.comfyHelp':'These options apply to the ComfyUI instance started by Media Studio.',
+      'tuning.option.auto':'Automatic','tuning.option.low':'Low VRAM','tuning.option.minimal':'Minimum VRAM',
+      'tuning.option.default':'RAM pressure cache','tuning.option.none':'Off','tuning.option.latent2rgb':'Latent RGB',
+    });
     const defaultText=key=>en[key]??key;
     const terminal=new Set(['completed','failed','cancelled','succeeded']);
     const stateNames={running:'稼働中',ready:'稼働中',stopped:'停止中',starting:'起動中',stopping:'停止中…',restarting:'再起動中',unknown:'確認できません',unavailable:'確認できません',unmanaged:'管理外のプロセス',failed:'失敗',error:'確認が必要',checking:'確認中',queued:'待機中',completed:'完了',succeeded:'完了',pending:'待機中',cancelled:'停止済み',active:'処理中'};
@@ -39,6 +65,7 @@ window.__ModuleLoader__.load({
       .studio-services *{box-sizing:border-box}.studio-services h3,.studio-services p{margin:0}.ss-heading,.ss-row{display:flex;align-items:center;justify-content:space-between;gap:10px}.ss-heading{margin-bottom:12px}.ss-heading h3{font-size:14px;font-weight:650}.ss-muted{color:var(--dsw-alias-label-secondary);font-size:11px}.ss-list{display:grid;gap:10px}.ss-service{padding:11px;border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-2);min-width:0}.ss-service strong{font-size:13px}.ss-state{font-size:10px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:2px 7px;color:var(--dsw-alias-label-secondary);white-space:nowrap}.ss-state[data-state=running],.ss-state[data-state=ready]{color:var(--dsw-alias-state-success-primary)}.ss-state[data-state=unknown],.ss-state[data-state=failed]{color:var(--dsw-alias-state-warn-primary)}.ss-buttons{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.ss-detail{margin-top:6px!important;overflow-wrap:anywhere}.ss-notice{padding:9px 11px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);margin-top:10px!important;overflow-wrap:anywhere}.ss-operation{margin-top:12px;padding:11px;border:1px solid var(--dsw-alias-border-l2);border-radius:11px}.ss-operation ol{padding-left:20px;margin:8px 0 0}.ss-operation li{padding:3px 0;overflow-wrap:anywhere}.ss-paths{margin-top:12px}.ss-paths summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:11px}.ss-paths dl{display:grid;gap:3px;margin:8px 0 0}.ss-paths dt{font-size:11px;color:var(--dsw-alias-label-secondary)}.ss-paths dd{margin:0 0 7px;overflow-wrap:anywhere;font-size:11px;white-space:pre-wrap}.ss-settings{padding-top:10px}.ss-settings>.ss-muted{margin:0 0 10px}
       .ss-operation-details{margin-top:9px}.ss-operation-details summary{cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:11px}
       .ss-path-editor{margin-top:16px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l1)}.ss-path-editor h4{font-size:13px;font-weight:650;margin:0 0 8px}.ss-path-field{display:grid;gap:5px;margin:12px 0;font-size:11px;color:var(--dsw-alias-label-secondary)}.ss-path-field input{width:100%;min-width:0;box-sizing:border-box;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px}.ss-path-field input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.ss-path-field input:disabled{opacity:.65}
+      .ss-path-field select{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px}
     `;
     const operationState=operation=>operation?.state??operation?.phase??operation?.status??null;
     const operationBusy=operation=>Boolean(operation&&!terminal.has(operationState(operation)));
@@ -137,7 +164,7 @@ window.__ModuleLoader__.load({
       if(typeof value.revision!=='string'||!PATH_FIELDS.every(([key])=>typeof value.values?.[key]==='string'))throw Error('起動パス設定の内容を確認できません。');
       return value;
     }
-    function createSettingsController({request=settingsRequest}={}){
+    function createSettingsController({request=settingsRequest,fields=PATH_FIELDS.map(([key])=>key)}={}){
       const listeners=new Set();let disposed=false,active=0,read=null,saveLock=false;
       let state={value:null,draft:null,loading:false,saving:false,error:'',message:'',uncertain:false};
       const publish=patch=>{if(disposed)return;state={...state,...patch};for(const fn of listeners)fn();};
@@ -153,13 +180,75 @@ window.__ModuleLoader__.load({
         if(disposed||saveLock||state.loading||state.uncertain||!state.value||!state.draft)return false;
         saveLock=true;const body={expectedRevision:state.value.revision,values:{...state.draft}};publish({saving:true,error:'',message:''});
         try{const value=await request(body,{signal:AbortSignal.timeout(30000)});if(!disposed){adopt(value);publish({message:'保存しました。次回のサービス起動から使用します。'});}return true;}
-        catch(e){if(!disposed)publish({uncertain:!e.definite,error:e.definite?e.message:'保存結果を確認できません。Reload pathsで保存済みの値を確認してください。自動再送はしません。'});return false;}
+        catch(e){if(!disposed)publish({uncertain:!e.definite,error:e.definite?e.message:'保存結果を確認できません。再読込して保存済みの値を確認してください。'});return false;}
         finally{saveLock=false;publish({saving:false});}
       }
       return {snapshot:()=>state,subscribe(fn){listeners.add(fn);return()=>listeners.delete(fn);},reload,save,
-        change(key,value){if(!disposed&&!state.loading&&!saveLock&&PATH_FIELDS.some(([field])=>field===key))publish({draft:{...state.draft,[key]:value},message:''});},
+        change(key,value){if(!disposed&&!state.loading&&!saveLock&&fields.includes(key))publish({draft:{...state.draft,[key]:value},message:''});},
         activate(){if(disposed)return()=>{};active++;if(active===1&&!state.value)void reload();let live=true;return()=>{if(!live)return;live=false;active--;if(active===0&&read){const pending=read;read=null;pending.abort.abort();publish({loading:false});}};},
         dispose(){disposed=true;read?.abort.abort();listeners.clear();}};
+    }
+    const engineFields={
+      Strata:[
+        {id:'context',en:'Context capacity (tokens)',ja:'コンテキスト上限（トークン）',min:32768,max:65536,step:1024},
+        {id:'prefill',en:'Prefill chunk (tokens)',ja:'入力処理のチャンク（トークン）',choices:['256','512','768','1024','auto']},
+        {id:'residentGiB',en:'Resident expert RAM (GiB)',ja:'エキスパートのRAM常駐予算（GiB）',min:8,max:24,step:1},
+        {id:'reserveMiB',en:'VRAM reserve (MiB)',ja:'VRAM予約（MiB）',min:2048,max:5120,step:1},
+      ],
+      ComfyUI:[
+        {id:'memoryMode',en:'GPU memory mode',ja:'VRAM管理',choices:['auto','low','minimal']},
+        {id:'cacheMode',en:'Node result cache',ja:'ノード結果キャッシュ',choices:['default','none']},
+        {id:'previewMethod',en:'Sampler preview',ja:'サンプラーのプレビュー',choices:['none','auto','latent2rgb']},
+        {id:'reserveGiB',en:'VRAM reserve (GiB)',ja:'VRAM予約（GiB）',min:0.5,max:4,step:0.25,optional:true},
+      ],
+    };
+    async function engineRequest(engine,body,{signal}={}){
+      const headers=body?{'Content-Type':'application/json','X-Local-Studio-Service-Settings':'1'}:{};
+      const proof=body?await desktopProof('engine-settings',signal):null;
+      if(proof)headers['X-Local-Studio-Desktop-Proof']=proof;
+      const response=await fetch(ENGINE_SETTINGS_PATH+'?'+new URLSearchParams({engine}),{
+        method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',headers,
+        ...(body?{body:JSON.stringify(body)}:{}),signal,
+      });
+      const value=await response.json();
+      if(!response.ok)throw Object.assign(Error(value.error),{definite:response.status<500});
+      return value;
+    }
+    function EnginePage({engine,editor,controller,t=defaultText}){
+      const state=useSyncExternalStore(editor.subscribe,editor.snapshot,editor.snapshot);
+      const lifecycle=useSyncExternalStore(controller.subscribe,controller.snapshot,controller.snapshot);
+      useEffect(()=>{
+        const deactivateEditor=editor.activate(),deactivateServices=controller.activate();
+        return ()=>{deactivateEditor();deactivateServices();};
+      },[editor,controller]);
+      const operation=lifecycle.value?.operation;
+      useEffect(()=>{if(operation?.service===engine&&operation.state==='completed')void editor.reload();},[editor,engine,operation?.id,operation?.state]);
+      const current=state.value,draft=state.draft??{},busy=state.loading||state.saving;
+      const changed=current&&Object.keys(current.values).some(key=>current.values[key]!==draft[key]);
+      const service=serviceRows(lifecycle.value).find(item=>item.id===engine);
+      const lifecycleBusy=lifecycle.posting||lifecycle.uncertain||Boolean(lifecycle.pending)||operationBusy(operation);
+      const locale=t('tuning.locale');
+      const running=current?.runningMatches===null?'tuning.unverified':current?.runningMatches?'tuning.applied':'tuning.pending';
+      return h('section',{className:'studio-services ss-settings','data-engine-settings':engine},h('style',null,css),
+        h('header',{className:'ss-heading'},h('h3',null,engine),h(Button,{type:'button',size:'sm',variant:'outline',disabled:busy,onClick:()=>void editor.reload()},t('refresh'))),
+        h('p',{className:'ss-muted',role:'status'},t(!current?'paths.loading':current.state==='stopped'?'tuning.stopped':running)),
+        h('p',{className:'ss-muted ss-detail'},t(engine==='Strata'?'tuning.contextHelp':'tuning.comfyHelp')),
+        ...engineFields[engine].map(field=>{
+          const label=locale==='ja'?field.ja:field.en;
+          const props={'aria-label':label,value:draft[field.id]??'',disabled:busy||!current,
+            onChange:e=>editor.change(field.id,field.choices?e.target.value:e.target.value===''?(field.optional?null:''):e.target.valueAsNumber)};
+          return h('label',{key:field.id,className:'ss-path-field'},h('span',null,label),field.choices
+            ?h('select',props,...field.choices.map(value=>h('option',{key:value,value},en['tuning.option.'+value]?t('tuning.option.'+value):value)))
+            :h('input',{...props,type:'number',min:field.min,max:field.max,step:field.step,placeholder:field.optional?t('tuning.default'):undefined}));
+        }),
+        h('div',{className:'ss-buttons'},
+          h(Button,{type:'button',size:'sm',variant:'primary',disabled:!changed||busy||lifecycleBusy||state.uncertain,onClick:()=>void editor.save()},t(state.saving?'paths.saving':'tuning.save')),
+          h(Button,{type:'button',size:'sm',variant:'outline',disabled:changed||busy||lifecycleBusy||state.uncertain||!['stopped','running'].includes(service.state),
+            onClick:()=>void controller.act(engine,service.state==='stopped'?'start':'restart')},t(service.state==='stopped'?'start':'restart'))),
+        state.error?h('p',{role:'alert',className:'ss-notice'},state.error):null,
+        state.message?h('p',{role:'status',className:'ss-muted ss-detail'},t('tuning.saved')):null,
+        lifecycle.error?h('p',{role:'alert',className:'ss-notice'},lifecycle.error):null,
+        operation?.service===engine?h(Operation,{operation}):null);
     }
     function Paths({controller,canSave=false,t=defaultText}){
       const state=useSyncExternalStore(controller.subscribe,controller.snapshot,controller.snapshot);
@@ -196,6 +285,11 @@ window.__ModuleLoader__.load({
       ctx.effect(()=>ctx.locale.register('studio.services','ja',ja));
       ctx.slots.inject('studio.monitor.services',()=>ctx.slots.register({name:'studio.monitor.services',id:'studio-services',order:10,locale:'studio.services',inject:()=>({controller})},ServicesView));
       ctx.slots.inject('settings.general.item',()=>ctx.slots.register({name:'settings.general.item',id:'studio-services-settings',order:14,locale:'studio.services',inject:()=>({controller,pathController,settings:true})},ServicesView));
+      for(const [index,engine] of ['Strata','ComfyUI'].entries()){
+        const editor=createSettingsController({request:(body,options)=>engineRequest(engine,body,options),fields:engineFields[engine].map(field=>field.id)});
+        ctx.effect(()=>()=>editor.dispose());
+        ctx.slots.inject('settings.section',()=>ctx.slots.register({name:'settings.section',id:'studio-tuning-'+engine.toLowerCase(),order:36+index,label:()=>engine,locale:'studio.services',inject:()=>({controller,editor,engine})},EnginePage));
+      }
     }
     return {inject:['slots','locale'],apply,ServicesView,Operation,Paths,createController,createSettingsController,settingsRequest,servicesRequest,serviceRows,operationState,operationBusy,en,ja};
   },

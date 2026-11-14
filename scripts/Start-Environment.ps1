@@ -7,7 +7,9 @@ $ErrorActionPreference = 'Stop'
 $taskRoot = if ($env:MEDIA_STUDIO_HOME) { if (-not [IO.Path]::IsPathFullyQualified($env:MEDIA_STUDIO_HOME)) { throw 'MEDIA_STUDIO_HOME must be absolute' }; [IO.Path]::GetFullPath($env:MEDIA_STUDIO_HOME) } else { Split-Path $PSScriptRoot -Parent }
 $settings = Get-Content -LiteralPath (Join-Path $taskRoot 'config\environment.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'DshLaunchLock.ps1')
+. (Join-Path $PSScriptRoot 'Comfy-Tuning.ps1')
 $dshLaunchLock = $null
+$comfyLaunchLock = $null
 
 function Get-ProjectPath([string]$RelativePath) {
     $result = [IO.Path]::GetFullPath((Join-Path $taskRoot $RelativePath))
@@ -92,6 +94,14 @@ try {
     $selected = if ($Service -eq 'All') { @('ComfyUI', 'DSH') } else { @($Service) }
     foreach ($name in $selected) {
         if ($name -eq 'ComfyUI') {
+            if(-not $ValidateOnly){
+                New-Item -ItemType Directory -Path (Get-ProjectPath 'runtime') -Force | Out-Null
+                $comfyLockPath=Get-ProjectPath 'runtime/ComfyUI-launch.lock'
+                if((Test-Path -LiteralPath $comfyLockPath) -and ((Get-Item -LiteralPath $comfyLockPath -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'ComfyUI launch lock is redirected.'}
+                $comfyLaunchLock=[IO.File]::Open($comfyLockPath,[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+                $settings=Get-Content -LiteralPath (Get-ProjectPath 'config/environment.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            }
+            $comfyTuning=Get-ComfyTuning $settings
             foreach ($field in @('comfyDirectory', 'comfyPythonExecutable', 'comfyUserDirectory', 'modelsDirectory', 'inputDirectory', 'outputDirectory')) {
                 if (-not [IO.Path]::IsPathFullyQualified([string]$settings.$field)) { throw "ComfyUI setting must be an absolute path: $field" }
                 $pathType = if ($field -eq 'comfyPythonExecutable') { 'Leaf' } else { 'Container' }
@@ -102,6 +112,7 @@ try {
             $entry = Join-Path $workingDirectory 'main.py'
             $port = [int]$settings.comfyPort
             $arguments = @('-s', $entry, '--disable-auto-launch', '--listen', '127.0.0.1', '--port', "$port", '--offline', '--enable-manager', '--models-directory', $settings.modelsDirectory, '--user-directory', $settings.comfyUserDirectory, '--input-directory', $settings.inputDirectory, '--output-directory', $settings.outputDirectory)
+            $arguments += $comfyTuning.Arguments
             # ComfyUI appends "temp" to this option. The configuration names the final folder.
             if (-not [IO.Path]::IsPathFullyQualified([string]$settings.tempDirectory)) { throw 'ComfyUI tempDirectory must be an absolute path.' }
             $tempDirectory = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($settings.tempDirectory))
@@ -158,7 +169,9 @@ try {
         $errLog = Join-Path $logDir "$stamp.stderr.log"
         $nativeArguments = ($arguments | ForEach-Object { '"' + $_ + '"' }) -join ' '
         $process = Start-Process -FilePath $executable -ArgumentList $nativeArguments -WorkingDirectory $workingDirectory -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
-        [ordered]@{ service=$name; processId=$process.Id; executable=$executable; startTimeUtcTicks=$process.StartTime.ToUniversalTime().Ticks.ToString(); url=$url; stdout=$outLog; stderr=$errLog } | ConvertTo-Json | Set-Content -LiteralPath $statePath -Encoding utf8
+        $record=[ordered]@{ service=$name; processId=$process.Id; executable=$executable; startTimeUtcTicks=$process.StartTime.ToUniversalTime().Ticks.ToString(); url=$url; stdout=$outLog; stderr=$errLog }
+        if($name -eq 'ComfyUI'){$record.comfyTuning=$comfyTuning.Values}
+        $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $statePath -Encoding utf8
         $ready = $false
         $deadline = [DateTime]::UtcNow.AddSeconds(150)
         while ([DateTime]::UtcNow -lt $deadline) {
@@ -175,6 +188,7 @@ try {
         if ($name -eq 'DSH') { Write-Output 'Open the authorized browser session with Open-DSH.cmd.' }
     }
 } finally {
+    if ($comfyLaunchLock) { $comfyLaunchLock.Dispose() }
     if ($dshLaunchLock) { $dshLaunchLock.Dispose() }
     foreach ($key in $savedEnvironment.Keys) {
         if ($null -eq $savedEnvironment[$key]) {

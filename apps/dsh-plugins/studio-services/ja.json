@@ -1,3 +1,20 @@
 {
     "title": "サービス", "paths.title": "起動パス", "start": "起動", "stop": "停止", "restart": "再起動", "unload": "リソース解放", "refresh": "更新", "checking": "確認中…", "checkReceipt": "受付記録を確認", "retrySameRequest": "同じ要求を再試行", "paths.comfyDirectory": "ComfyUIフォルダー", "paths.comfyPythonExecutable": "ComfyUI Python", "paths.strataPythonExecutable": "Strata Python", "paths.controllerNodeExecutable": "Controller Node.js", "paths.save": "パスを保存", "paths.saving": "保存中…", "paths.reload": "パスを再読み込み", "paths.loading": "読み込み中…"
+    ,
+    "tuning.locale": "ja",
+    "tuning.save": "設定を保存",
+    "tuning.saved": "保存しました。次回のサービス起動から使用します。",
+    "tuning.default": "システム既定",
+    "tuning.stopped": "サービス停止中",
+    "tuning.applied": "保存した設定で稼働中",
+    "tuning.pending": "保存済み・再起動で反映",
+    "tuning.unverified": "現在の起動設定を確認できません",
+    "tuning.contextHelp": "両版のDSHモデルの上限はこの値以下にしてください。上限を上げるとVRAM使用量が増えることがあります。",
+    "tuning.comfyHelp": "Media Studioが起動するComfyUIに適用します。",
+    "tuning.option.auto": "自動",
+    "tuning.option.low": "低VRAM",
+    "tuning.option.minimal": "最小VRAM",
+    "tuning.option.default": "空きRAMに応じて管理",
+    "tuning.option.none": "オフ",
+    "tuning.option.latent2rgb": "Latent RGB"
   }
