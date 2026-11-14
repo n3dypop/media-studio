@@ -12,7 +12,8 @@ import {deliveryPosition, singleVisibleImageDelivery, visibleDelivery} from './e
 import {createRuntimeConfig,runtimeRootOf} from '../shared/plugin-config.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
 import {createDurableRuntime} from './durable-runtime.mjs';
-import { MOSS_OFFICIAL_IDS, QWEN21_OFFICIAL_IDS } from '../../controller/media-modes.mjs';
+import { MOSS_OFFICIAL_IDS, QWEN21_OFFICIAL_IDS, MODEL_PROFILES as KNOWN_PROFILES,
+  activeModelProfiles as MODEL_PROFILES, MEDIA_MODES as MODES } from '../../controller/media-modes.mjs';
 
 export const name = 'local-genai';
 export const inject = ['tools', 'attachments', 'llm', 'systemPrompt', 'agents', 'sessions', 'sessionPersistence'];
@@ -26,9 +27,6 @@ const NATIVE_TOOLS = [
   'local_production_render', 'local_render_result', 'local_render_reconcile', 'local_production_evaluate', 'local_production_cancel',
   'local_search_propose', 'local_search_result',
 ];
-const MODEL_PROFILES = ['qwen-photo-v1', 'qwen-image-2.1-base-v1', 'qwen-image-2.1-turbo-v1', 'moss-image-sft-int8-v1', 'moss-image-sft-official-v1', 'moss-image-base-official-v1', 'realesrgan-x4plus-v1', 'image-scale-v1'];
-const HISTORICAL_MODEL_PROFILES = ['wan22-ti2v-5b-v1', 'minimax-h3-ref2va-v1'];
-const MODES = ['t2i', 'i2i', 'edit', 'background-removal', 'layout', 'depth', 'upscale', 'video'];
 const modeParameter = { type: 'string', enum: MODES, description: 'Actual operation: image content editing is edit, not relighting. Read the selected profile capabilities.' };
 const modelProfileParameter = { type: 'string', description: 'Exact profile ID from the live available catalog. A profile absent from that catalog is unavailable for this environment; never substitute a different model.' };
 const objectSchema = { type: 'object', additionalProperties: true };
@@ -181,7 +179,7 @@ function workflowMetadata(workflow) {
     .filter(key => workflow[key] !== undefined).map(key => [key, workflow[key]]));
 }
 
-export function workflowCatalogForAgent(catalog, role) {
+export function workflowCatalogForAgent(catalog, role, { mode: requestedMode } = {}) {
   if (role !== 'studio') return catalog;
   const { modelProfiles, models, templates, capabilities, limits, ...fields } = catalog;
   const mode = fields.mode;
@@ -194,7 +192,7 @@ export function workflowCatalogForAgent(catalog, role) {
     ...Object.fromEntries(['modelProfile', 'requestedProfile', 'requestedProfileStatus', 'mode', 'templateStatus', 'validationScope']
       .filter(key => fields[key] !== undefined).map(key => [key, fields[key]])),
     modelProfiles: (modelProfiles ?? []).map(({ id, label, available, qualification }) => ({ id, label, available, ...(qualification === undefined ? {} : { qualification }) })),
-    capabilities: (capabilities ?? []).filter(item => !mode || item.mode === mode),
+    capabilities: (capabilities ?? []).filter(item => !requestedMode || item.mode === requestedMode),
     models: (models ?? []).map(({ name, available }) => ({ name, available })),
     templates: (templates ?? []).map(({ id, available, sha256 }) => ({ id, available, sha256 })),
     limits: productionLimits,
@@ -221,7 +219,7 @@ function resultProduction(result, run, sessionId) {
   if (!p || p.id !== run.productionId || p.sessionId !== sessionId || run.sessionId !== sessionId
     || !Number.isSafeInteger(p.revision) || p.revision < 0 || !Number.isSafeInteger(run.productionRevision) || p.revision < run.productionRevision
     || !Array.isArray(p.attempts) || !p.attempts.includes(run.id) || !Array.isArray(p.evaluations)
-    || !b || !text(b.request, 8000) || ![...MODEL_PROFILES,...HISTORICAL_MODEL_PROFILES].includes(b.modelProfile) || !MODES.includes(b.mode ?? 't2i')
+    || !b || !text(b.request, 8000) || !Object.hasOwn(KNOWN_PROFILES,b.modelProfile) || !MODES.includes(b.mode ?? 't2i')
     || !Array.isArray(b.criteria) || b.criteria.length < 1 || b.criteria.length > 12
     || b.criteria.some(item => !text(item?.id, 64) || !text(item?.description, 1000)) || new Set(b.criteria.map(item => item.id)).size !== b.criteria.length
     || !Array.isArray(b.invariants) || b.invariants.length > 20 || b.invariants.some(item => !text(item, 1000))
@@ -635,10 +633,10 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     const result = await request('/api/workflow-catalog' + (query.size ? `?${query}` : ''), { sessionId: sessionIdentity(exec), signal: exec.signal });
     if (role === 'image-generation') return { ...Object.fromEntries(['modelProfile','requestedProfile','requestedProfileStatus','templateStatus'].filter(key=>result[key]!==undefined).map(key=>[key,result[key]])), modelProfiles: result.modelProfiles, models: result.models, templates: result.templates?.map(({ id, available, sha256 }) => ({ id, available, sha256 })), limits: result.limits, validationScope: result.validationScope };
     const catalog = { ...Object.fromEntries(['modelProfile', 'requestedProfile', 'requestedProfileStatus', 'mode', 'capabilities', 'coreModelLedger', 'templateStatus'].filter(key => result[key] !== undefined).map(key => [key, result[key]])), modelProfiles: result.modelProfiles, models: result.models, templates: result.templates, nodeSchemas: result.nodeSchemas, limits: result.limits, validationScope: result.validationScope };
-    return workflowCatalogForAgent(catalog, role);
+    return workflowCatalogForAgent(catalog, role, args);
   });
-  register('local_workflow_library', 'Find ComfyUI templates by name, operation and media. Read dependencies and paths. Only dshProfile identifies a managed equivalent.', {
-    query: { type: 'string', description: 'Family name or keywords, for example FastH3.' },
+  register('local_workflow_library', 'Find standalone ComfyUI templates and dependencies. dshProfile identifies a managed equivalent; unavailableDshProfile needs maintenance.', {
+    query: { type: 'string', description: 'Family, profile ID, model file or keyword.' },
     operation: { type: 'string', description: 'Template operation such as t2i, edit, t2v or i2v.' },
     media: { type: 'string', enum: ['image', 'video'] },
     page: { type: 'integer', description: 'Result page starting at 1.' },
@@ -1047,7 +1045,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   // Own the complete scoped persona. Reusing the canonical prefix name also
   // shadows an ancestor persona instead of creating two complete sections.
   const durableGuide=durable?`\nDurable recovery: when a mutation is unresolved, never resend it. Use local_mutation_pending to recover this conversation's exact pending request identities, then use the matching read-only tool: local_asset_reconcile for image imports, local_search_reconcile for search proposals, local_production_action_reconcile for evaluation/iteration/feedback, local_pe_receipt_reconcile for a PE start/decision/recovery request, local_cancel_reconcile for stop acceptance, and the existing create/workflow/render reconcile tools for those operations. For a PE start use the production ID as target; for a PE decision or recovery use the PE run ID. A started or missing receipt stays unresolved. A verified rejected or administratively abandoned import/search is not a successful operation. A cancellation or PE recovery receipt proves acceptance only, not termination or resource release. Approval of a search proposal and any external transmission are separate; a prior claim can remain uncertain after a stop.`:'';
-  ctx.systemPrompt.section({ name: 'deployment:persona-prefix', order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'), text: guideForRole(role, TOOL_GUIDE+durableGuide), interpolate: false, complete: true });
+  ctx.systemPrompt.section({ name: 'deployment:persona-prefix', order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'), text: guideForRole(role, TOOL_GUIDE)+durableGuide, interpolate: false, complete: true });
   ctx.systemPrompt.suppressRuntimeContext();
   return {
     role, tools: definitions, guard, observeResult,

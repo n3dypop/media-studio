@@ -33,5 +33,5 @@ available but its production/conversation control slots are absent.
 Disabling the plugin removes its routes and controls. It does not stop active
 work or delete conversations and results; the Controller retains execution and
 resource ownership. Re-enable the controls or use the managed administration
-path to finish an outstanding decision. The integration targets DSH 0.2.1-rc.5.
+path to finish an outstanding decision. See the package manifest for supported DSH versions.
 See [configuration](../../../docs/configuration.md).

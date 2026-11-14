@@ -1,9 +1,10 @@
 # Adding a model, node or workflow
 
-Media Studio executes registered capabilities. It can select approved templates
-and change supported graph parameters. It does not install missing model weights,
-custom nodes or an unsupported generation technique merely because a user asks
-for one. The user or a separate maintenance agent develops that integration.
+Media Studio selects approved templates and adjusts their exposed settings.
+The user or a separate maintenance agent owns new workflows, topology changes,
+asset installation and registration. The standalone library lists editable UI
+workflows. The managed catalog lists model/operation pairs that Controller can
+admit for execution from Media Studio.
 
 Use this handoff sequence:
 
@@ -16,7 +17,7 @@ Use this handoff sequence:
    not register a capability with the Controller or DSH.
 3. Implement the Controller profile, input admission and output validation,
    permitted graph nodes/parameters, resource behavior and cancellation/recovery.
-   Register the matching tool/catalog contract without implying broader support.
+   Use the managed profile checklist below for natural-language use in DSH.
 4. Validate the graph statically first. ComfyUI `/prompt` submits a job; it is not
    a read-only validation endpoint. Perform a separately identified execution
    test and preserve its model, seed, workflow and settings.
@@ -28,6 +29,34 @@ Use this handoff sequence:
 Do not silently replace an explicitly requested model, lower dimensions or video
 duration, terminate unmanaged work or publish an untested capability as available.
 Missing capabilities should produce a useful handoff, not an invented execution.
+
+## Managed profile checklist
+
+1. Add a stable profile ID and label to `apps/controller/media-modes.mjs`.
+   Both Controller and the DSH tool layer use this registry. Keep existing IDs
+   for saved records. If the preset gains a new operation or input type, implement
+   its input admission, mode checks and ownership binding here before exposing it.
+2. Add `workflows/approved/<profile-id>.json` in ComfyUI API format. Preserve a
+   separate editable UI JSON in the ComfyUI Workflows folder. In
+   `workflows.mjs`, register exact model loaders, allowed nodes and connections,
+   output limits and the runtime discovery for each supported pair. In `comfy.mjs`
+   validate preparation and the final graph against installed model and node schemas.
+   A known profile alone does not give the assistant permission to execute it.
+3. Implement preparation and render dispatch. The DSH create result returns
+   `next.tool` and `next.args` through `productionPreparation` in
+   `apps/dsh-plugins/local-genai/index.mjs`. Keep permission and arguments aligned
+   with that dispatch. Test explicit profile selection, dimensions, input ownership,
+   output attachment and evaluation. Verify model/node provenance in the ledger.
+4. Put the same profile ID and operation on the UI workflow's library entry.
+   Check `dshProfile` in **Catalog** and the pair in `local_workflow_catalog` after
+   updating Controller and the DSH plugin together. `unavailableDshProfile`
+   exposes an unresolved mapping. Check its ID, operation, assets and permitted
+   node schema before claiming DSH availability.
+5. Use **Add to prompt** in a `media-studio` conversation. Confirm the exact
+   profile and operation in the draft. For acceptance, send a minimal request
+   with an expected size and owned inputs, then verify the actual attachment,
+   evaluation, resource recovery and provenance. Record which Host and model
+   ran each test, and how to restore the prior version.
 
 ## Standalone ComfyUI library
 
@@ -41,8 +70,10 @@ for the same operation. Registering a UI template never creates a managed profil
 `GET /api/workflow-library` and the DSH `local_workflow_library` tool support keyword,
 media and operation filters and pagination. The library checks template files,
 local node registration and model loader options without queuing a job. It
-reports absent dependencies and exposes a `dshProfile` only when the live managed
-catalog exposes that operation. GPU fit, runtime behavior and visual quality
+reports absent dependencies. To see a managed mapping, match the entry's profile
+and operation against the live catalog. The response lists all registered
+operation filters, and keyword search includes profile IDs and weight names.
+GPU fit, runtime behavior and visual quality
 require separate validation. A missing library index leaves the managed catalog
 usable. Keep model sources and hashes in the asset manifest or handoff.
 

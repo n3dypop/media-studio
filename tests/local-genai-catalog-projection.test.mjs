@@ -17,7 +17,8 @@ test('studio catalog keeps template selection usable without returning a graph o
   const compact = workflowCatalogForAgent(catalog, 'studio');
   assert.deepEqual(compact.modelProfiles, [{ id: modelProfile, label: 'MOSS Image', available: true }]);
   assert.deepEqual(JSON.parse(JSON.stringify(compact)), compact, 'DSH tool output must be lossless JSON');
-  assert.deepEqual(compact.capabilities, [catalog.capabilities[0]]);
+  assert.deepEqual(compact.capabilities, catalog.capabilities, 'the default template mode must not hide other operations');
+  assert.deepEqual(workflowCatalogForAgent(catalog, 'studio', { mode: 'edit' }).capabilities, [catalog.capabilities[1]]);
   assert.deepEqual(compact.templates, [{ id: modelProfile, available: true, sha256: 'a'.repeat(64) }]);
   assert.deepEqual(compact.limits, { maxPixels: 1500000, maxSteps: 40 });
   assert.equal(Object.hasOwn(compact, 'nodeSchemas'), false);

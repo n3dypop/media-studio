@@ -9,8 +9,8 @@ compatibility entries remain distinguishable in settings as **Legacy workflow
 The plugin adapts DSH's `conversation.hero.agentPreset` slot while reusing the
 official picker component and selection callback. It does not rewrite stored
 conversations, the preset registry or selection history, and registers no Host
-route. Its compatibility adapter targets DSH 0.2.1-rc.5; upstream slot/component
-or injected-prop changes require review before updating the Host.
+route. Review the official slot and its injected props when updating the Host.
+See the package manifest for supported DSH versions.
 
 Disabling the plugin restores the standard picker, which may display legacy
 entries again. Existing conversations and running generations remain unchanged;

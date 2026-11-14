@@ -1,7 +1,10 @@
 # Studio Monitor
 
-This Host/client plugin owns the **Media & Resources** right pane. Open it with
-**Resources** in the conversation header or through the right-pane guide. DSH's
+This Host/client plugin owns the **Media & Resources** and **Catalog** tabs.
+Open them with **Resources** and **Catalog** in the conversation header or from
+the right-pane guide. The new conversation shows the buttons above its input.
+Catalog shows Strata startup settings, the loaded model, and ComfyUI workflows
+with dependency checks and any available DSH mapping. DSH's
 official sidebar provides resizing, tabs, focus and narrow-screen layout; the
 plugin does not patch the Host DOM or overwrite another tab's width preference.
 
@@ -39,7 +42,7 @@ unknown ownership produce unavailable progress. The stage list does not claim
 that optional iteration or visual review already happened.
 
 Disabling the monitor removes its pane and child-slot surfaces without changing
-Controller execution, resource ownership or saved results. The integration targets
-DSH 0.2.1-rc.5 official sidebar/header APIs. See
+Controller execution, resource ownership or saved results. See the package
+manifest for supported DSH versions and
 [configuration](../../../docs/configuration.md) and the
 [Controller](../../controller/README.md).

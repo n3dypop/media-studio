@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, realpath, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
-import {UPSCALE_PROFILE,RESIZE_PROFILE,VIDEO_PROFILE_ID,H3_PROFILE_ID,RETIRED_VIDEO_PROFILES,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS,QWEN21_MAX_INPUTS,assertActiveProfile,mediaIntent,assertModeProfile,assertInputBinding,comboChoices,mossInputTemplate} from './media-modes.mjs';
+import {UPSCALE_PROFILE,RESIZE_PROFILE,VIDEO_PROFILE_ID,H3_PROFILE_ID,RETIRED_VIDEO_PROFILES,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS,QWEN21_MAX_INPUTS,MODEL_PROFILES,LEGACY_QWEN_PROFILE as PROFILE,MOSS_PROFILE,assertActiveProfile,mediaIntent,assertModeProfile,assertInputBinding,comboChoices,mossInputTemplate} from './media-modes.mjs';
 import {buildMossOfficialGraph,validateMossOfficialGraph,inspectMossOfficialSchemas,resolveMossOwnedInputs} from './moss-official.mjs';
 import {QWEN21_PROFILES,buildQwen21Graph,validateQwen21Graph,resolveQwen21OwnedInputs} from './qwen21-workflow.mjs';
 import {UPSCALE_NODE_TYPES,upscaleModels,upscaleTemplate,validateUpscaleGraph} from './upscale-workflow.mjs';
@@ -9,20 +9,7 @@ import {profileLedger,nodeLedger,coreModelLedger} from './model-ledger.mjs';
 import {comfyWorkflowLibrary} from './comfy-workflow-library.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const PROFILE = 'qwen-photo-v1';
-export const MOSS_PROFILE = 'moss-image-sft-int8-v1';
-export const MODEL_PROFILES = Object.freeze({
-  [PROFILE]: {label:'Qwen-Image 2.1 GGUF (previous installation)',qualification:'existing-single-generation-evidence'},
-  [MOSS_PROFILE]: {label:'MOSS-Image SFT INT8 ConvRot',qualification:'native-integration-under-validation'},
-  'moss-image-sft-official-v1': {label:'MOSS-Image SFT (official workflows)',qualification:'runtime-validation-required'},
-  'moss-image-base-official-v1': {label:'MOSS-Image Base (official workflows)',qualification:'runtime-validation-required'},
-  'qwen-image-2.1-base-v1': {label:'Qwen-Image 2.1 Base (official)',qualification:'runtime-validation-required'},
-  'qwen-image-2.1-turbo-v1': {label:'Qwen-Image 2.1 Turbo (official)',qualification:'runtime-validation-required'},
-  [UPSCALE_PROFILE]: {label:'RealESRGAN x4plus (AI upscale)',qualification:'runtime-validation-required'},
-  [RESIZE_PROFILE]: {label:'ImageScale (standard resize, no AI model)',qualification:'standard-node-resize'},
-  [VIDEO_PROFILE_ID]: {label:'Retired video profile',qualification:'historical-read-only'},
-  [H3_PROFILE_ID]: {label:'Retired video profile',qualification:'historical-read-only'},
-});
+export { MODEL_PROFILES, MOSS_PROFILE } from './media-modes.mjs';
 const MOSS_COUNTS = Object.freeze({ CLIPTextEncode: [1, 2], KSampler: [1, 1], EmptyFlux2LatentImage: [0, 1],
   SaveImage: [1, 1], VAELoader: [1, 1], UNETLoader: [1, 1], CLIPLoader: [1, 1], VAEDecode: [1, 1],
   ConditioningZeroOut: [0, 1], SkipLayerGuidanceDiTSimple: [0, 1], ImageScale: [0, 3],LoadImage:[0,1],VAEEncode:[0,1] });
@@ -426,12 +413,10 @@ export class WorkflowRegistry {
 
   async library(filters) {
     return comfyWorkflowLibrary({ ...filters, userDirectory: this.comfyUserDirectory, modelDirectory: this.comfyModelDirectory, installed: () => this.installed(),
-      catalog: async objects => (await this.catalog({}, objects)).capabilities });
+      catalog: objects => this.discoverCapabilities(objects).capabilities });
   }
 
-  async catalog({modelProfile=this.profileId,mode=([UPSCALE_PROFILE,RESIZE_PROFILE].includes(modelProfile)?'upscale':[VIDEO_PROFILE_ID,H3_PROFILE_ID].includes(modelProfile)?'video':'t2i'),inputAssetId=null,sessionId=null}={}, installedObjects) {
-    if(typeof modelProfile!=='string'||!/^[-a-zA-Z0-9_.]{1,100}$/.test(modelProfile)){const error=new Error('Invalid requested model profile');error.status=400;throw error;}
-    const objects = installedObjects ?? await this.installed();
+  discoverCapabilities(objects) {
     const availableModels=profile=>profile.models.map(model => {
       const schema = objects[model.nodeType];
       const choices = comboChoices(schema?.input?.required?.[model.input]);
@@ -455,13 +440,21 @@ export class WorkflowRegistry {
       const options={variant:id===QWEN21_PROFILES.base?'base':'turbo',mode:candidateMode,prompt:'schema check',seed:'1',width:768,height:1024,sessionId:sampleOwner,inputAssets:candidateMode==='t2i'?[]:[qwenSample]};
       try{const sample=buildQwen21Graph(options);validateQwen21Graph(sample.graph,{options,objects});capabilities.push({modelProfile:id,mode:candidateMode,inputRequired:candidateMode!=='t2i',qualification:'runtime-validation-required',runtimeTested:false});}catch{}
     }
+    return {modelProfiles,availableIds,capabilities,availableModels,runtimeAvailable};
+  }
+
+  async catalog({modelProfile=this.profileId,mode=([UPSCALE_PROFILE,RESIZE_PROFILE].includes(modelProfile)?'upscale':[VIDEO_PROFILE_ID,H3_PROFILE_ID].includes(modelProfile)?'video':'t2i'),inputAssetId=null,sessionId=null}={}, installedObjects) {
+    if(typeof modelProfile!=='string'||!/^[-a-zA-Z0-9_.]{1,100}$/.test(modelProfile)){const error=new Error('Invalid requested model profile');error.status=400;throw error;}
+    const objects = installedObjects ?? await this.installed();
+    const {modelProfiles,availableIds,capabilities,availableModels,runtimeAvailable}=this.discoverCapabilities(objects);
     // No selected profile is silently substituted. An explicit name that is
     // absent from the live set may be uninstalled, unsupported or temporarily
     // unavailable; we do not infer which. No graph or model choices leak as
     // usable for such a request.
-    if(!availableIds.has(modelProfile))return {modelProfile:null,requestedProfile:modelProfile,requestedProfileStatus:'unavailable',mode,inputAssetId:null,
+    const modeAvailable=capabilities.some(item=>item.modelProfile===modelProfile&&item.mode===mode);
+    if(!modeAvailable)return {modelProfile:null,requestedProfile:modelProfile,requestedProfileStatus:availableIds.has(modelProfile)?'mode-unavailable':'unavailable',mode,inputAssetId:null,
       assetLimits:{purpose:'input is wired to ComfyUI; reference is for core understanding only'},capabilities,modelProfiles,coreModelLedger:coreModelLedger(),models:[],templates:[],nodeSchemas:{},limits:null,
-      validationScope:'The requested profile is absent from the current available catalog. Check installed assets, nodes and controller registration; no alternative was selected.'};
+      validationScope:'The requested profile and operation are not available together. Check installed assets, nodes and controller registration.'};
     assertModeProfile(mode,modelProfile);
     if(QWEN21_OFFICIAL_IDS.includes(modelProfile)){
       const names=objects.TextEncodeQwenImage21?.input?.required?.images?.[1]?.template?.names;

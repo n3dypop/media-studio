@@ -2,17 +2,32 @@ export const UPSCALE_PROFILE='realesrgan-x4plus-v1';
 export const RESIZE_PROFILE='image-scale-v1';
 export const VIDEO_PROFILE_ID='wan22-ti2v-5b-v1';
 export const H3_PROFILE_ID='minimax-h3-ref2va-v1';
+export const LEGACY_QWEN_PROFILE='qwen-photo-v1';
+export const MOSS_PROFILE='moss-image-sft-int8-v1';
+export const MOSS_OFFICIAL_IDS=Object.freeze(['moss-image-sft-official-v1','moss-image-base-official-v1']);
+export const QWEN21_OFFICIAL_IDS=Object.freeze(['qwen-image-2.1-base-v1','qwen-image-2.1-turbo-v1']);
 // Historical IDs are retained solely to read existing production records.
 // Adding a future video profile requires an explicit new integration.
 export const RETIRED_VIDEO_PROFILES=Object.freeze([VIDEO_PROFILE_ID,H3_PROFILE_ID]);
+export const MODEL_PROFILES=Object.freeze({
+  [LEGACY_QWEN_PROFILE]: {label:'Qwen-Image 2.1 GGUF (previous installation)',qualification:'existing-single-generation-evidence'},
+  [MOSS_PROFILE]: {label:'MOSS-Image SFT INT8 ConvRot',qualification:'native-integration-under-validation'},
+  [MOSS_OFFICIAL_IDS[0]]: {label:'MOSS-Image SFT (official workflows)',qualification:'runtime-validation-required'},
+  [MOSS_OFFICIAL_IDS[1]]: {label:'MOSS-Image Base (official workflows)',qualification:'runtime-validation-required'},
+  [QWEN21_OFFICIAL_IDS[0]]: {label:'Qwen-Image 2.1 Base (official)',qualification:'runtime-validation-required'},
+  [QWEN21_OFFICIAL_IDS[1]]: {label:'Qwen-Image 2.1 Turbo (official)',qualification:'runtime-validation-required'},
+  [UPSCALE_PROFILE]: {label:'RealESRGAN x4plus (AI upscale)',qualification:'runtime-validation-required'},
+  [RESIZE_PROFILE]: {label:'ImageScale (standard resize, no AI model)',qualification:'standard-node-resize'},
+  [VIDEO_PROFILE_ID]: {label:'Retired video profile',qualification:'historical-read-only'},
+  [H3_PROFILE_ID]: {label:'Retired video profile',qualification:'historical-read-only'},
+});
+export const activeModelProfiles=Object.freeze(Object.keys(MODEL_PROFILES).filter(id=>!RETIRED_VIDEO_PROFILES.includes(id)));
 export function assertActiveProfile(modelProfile) {
   if(RETIRED_VIDEO_PROFILES.includes(modelProfile)) {
     const error=new Error('指定モデルはこの環境から撤去されました。動画生成には別途モデルの導入と検証が必要です。');
     error.status=409; throw error;
   }
 }
-export const MOSS_OFFICIAL_IDS=Object.freeze(['moss-image-sft-official-v1','moss-image-base-official-v1']);
-export const QWEN21_OFFICIAL_IDS=Object.freeze(['qwen-image-2.1-base-v1','qwen-image-2.1-turbo-v1']);
 // The packaged official UI workflow exposes 10 image sockets. The installed
 // native TextEncodeQwenImage21 schema exposes up to 16; 11–16 are an explicit
 // Controller-built node extension, subject to live schema and resource checks.

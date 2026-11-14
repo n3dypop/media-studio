@@ -30,6 +30,5 @@ projection. Active HTTP requests may fail, but conversations and saved outputs
 remain available for reconstruction after re-enabling. It does not cancel jobs
 or release GPU resources; those remain Controller responsibilities.
 
-The integration targets DSH 0.2.1-rc.5. Do not enable the retired `local-genai-ui`
-result renderer alongside this plugin, because both register overlapping display
-and route entries. See [configuration](../../../docs/configuration.md).
+See the package manifest for supported DSH versions and
+[configuration](../../../docs/configuration.md) for setup.

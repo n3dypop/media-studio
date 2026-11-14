@@ -52,6 +52,5 @@ outstanding work.
 
 The plugin owns its `studio.services` English/Japanese dictionaries. Edit
 `ja.json`, then run `node build-client.mjs` to rebuild its embedded client
-dictionary. Adding Japanese to DSH's language picker is the separate language
-plugin's responsibility. The integration targets DSH 0.2.1-rc.5; see
-[configuration](../../../docs/configuration.md).
+dictionary. Select Japanese through DSH's language setting. See the package
+manifest for supported DSH versions and [configuration](../../../docs/configuration.md).

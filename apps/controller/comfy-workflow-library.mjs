@@ -35,12 +35,12 @@ function modelAvailable(objects, { category, name }) {
 }
 
 function validEntry(entry) {
-  return /^[a-z0-9-]{1,64}$/.test(entry?.id ?? '') && bounded(entry.family, 80) && bounded(entry.label, 100)
-    && /^[a-z0-9-]{1,24}$/.test(entry.mode ?? '') && workflowFile.test(entry.file)
+  return bounded(entry?.id, 64) && /^[a-z0-9-]+$/.test(entry.id) && bounded(entry.family, 80) && bounded(entry.label, 100)
+    && bounded(entry.mode, 24) && /^[a-z0-9-]+$/.test(entry.mode) && typeof entry.file === 'string' && workflowFile.test(entry.file)
     && ['image', 'video'].includes(entry.media) && Array.isArray(entry.models) && entry.models.length <= 20
     && entry.models.every(model => model && Object.hasOwn(loaders, model.category)
       && bounded(model.name, 240) && modelName.test(model.name) && !model.name.split('/').some(part => part === '.' || part === '..'))
-    && (entry.profile === undefined || /^[a-z0-9.-]{1,64}$/.test(entry.profile));
+    && (entry.profile === undefined || (bounded(entry.profile, 64) && /^[a-z0-9.-]+$/.test(entry.profile)));
 }
 
 async function inspectWorkflow(root, entry, objects, resources) {
@@ -60,7 +60,7 @@ async function inspectWorkflow(root, entry, objects, resources) {
   const groups = new Set(subgraphs.map(graph => graph.id));
   const types = [...new Set([...graph.nodes, ...subgraphs.flatMap(graph => graph.nodes)].map(node => node?.type))]
     .filter(type => !groups.has(type) && type !== 'Note' && type !== 'MarkdownNote' && type !== 'Reroute');
-  if (!types.length || types.some(type => !nodeName.test(type ?? ''))) return { state: 'template-invalid' };
+  if (!types.length || types.some(type => typeof type !== 'string' || !nodeName.test(type))) return { state: 'template-invalid' };
   const missingNodes = types.filter(type => !registeredNode(objects, type));
   const missingModels = entry.models.filter(model => !modelAvailable(objects, model)).map(model => model.name);
   const resourceUsage = await resources(entry, createHash('sha256').update(bytes).digest('hex'));
@@ -92,12 +92,13 @@ export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, inst
     throw new ApiError(503, 'ComfyUI workflow library is invalid');
   }
   const terms = query?.toLowerCase().trim().split(/\s+/).filter(Boolean) ?? [];
+  const operations = [...new Set(index.workflows.map(entry => entry.mode))].sort();
   const entries = index.workflows.filter(entry => {
-    const text = `${entry.id} ${entry.family} ${entry.label} ${entry.mode}`.toLowerCase();
+    const text = [entry.id, entry.family, entry.label, entry.mode, entry.profile, ...entry.models.map(model => model.name)].join(' ').toLowerCase();
     return (!mode || mode === entry.mode) && (!media || media === entry.media) && terms.every(term => text.includes(term));
   }).sort((a, b) => a.family.localeCompare(b.family) || a.id.localeCompare(b.id));
   const selected = entries.slice((page - 1) * limit, page * limit);
-  if (!selected.length) return { ...empty, state: 'configured', total: entries.length };
+  if (!selected.length) return { ...empty, state: 'configured', operations, total: entries.length };
   const objects = await installed();
   const managed = selected.some(entry => entry.profile) ? await catalog(objects) : [];
   const observations = await readLocalJson(root, 'media-studio/workflow-resource-observations.json', 128 * 1024).catch(() => null);
@@ -105,8 +106,9 @@ export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, inst
   const workflows = await Promise.all(selected.map(async entry => {
     const { id, family, label, mode, media, file, profile } = entry;
     const dshProfile = managed.find(item => item.modelProfile === profile && item.mode === mode)?.modelProfile;
-    return { id, family, label, mode, media, file, ...(dshProfile && { dshProfile }), ...await inspectWorkflow(root, entry, objects, resources) };
+    return { id, family, label, mode, media, file, ...(dshProfile ? { dshProfile } : profile ? { unavailableDshProfile: profile } : {}),
+      ...await inspectWorkflow(root, entry, objects, resources) };
   }));
-  return { ...empty, state: 'configured', total: entries.length, workflows,
+  return { ...empty, state: 'configured', operations, total: entries.length, workflows,
     validationScope: 'Static availability in standalone ComfyUI. A dshProfile identifies a managed equivalent. No GPU execution or visual quality was tested.' };
 }

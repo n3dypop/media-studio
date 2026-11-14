@@ -26,8 +26,8 @@ window.__ModuleLoader__.load({
           dispose=ctx.slots.register({name:key,priority:-1000,locale:found.locale,inject:found.inject},adapter);
         }finally{changing=false;}
       };
-      ctx.on('slots/changed',changed=>{if(changed===key)update();});
-      ctx.effect(()=>()=>dispose?.());
+      const unsubscribe=ctx.on('slots/changed',changed=>{if(changed===key)update();});
+      ctx.effect(()=>()=>{unsubscribe?.();dispose?.();});
       update();
     }
     function apply(ctx){installStudioPicker(ctx);}

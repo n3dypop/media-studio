@@ -46,6 +46,13 @@ test('ComfyUI library filters and pages templates without promoting them to mana
   assert.equal(secondPage.workflows[0].dshProfile, 'moss-profile');
   assert.equal((await comfyWorkflowLibrary({ ...options, mode: 'layout' })).total, 0);
   assert.equal(discoveries, 2);
+  const byModel = await comfyWorkflowLibrary({ ...options, query: 'fasth3/v2/video.safetensors' });
+  assert.equal(byModel.workflows[0].id, video.id);
+  assert.deepEqual(byModel.operations, ['edit', 't2v']);
+  const byProfile = await comfyWorkflowLibrary({ ...options, query: 'moss-profile', catalog: () => [] });
+  assert.equal(byProfile.workflows[0].unavailableDshProfile, 'moss-profile');
+  assert.equal(byProfile.workflows[0].dshProfile, undefined);
+  assert.equal(byProfile.workflows[0].state, 'static-ready');
   await assert.rejects(comfyWorkflowLibrary({ ...options, limit: 26 }), { status: 400 });
 });
 

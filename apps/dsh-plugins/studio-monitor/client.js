@@ -177,13 +177,13 @@ window.__ModuleLoader__.load({
       en:{description:'ComfyUI workflows and Strata model',refresh:'Refresh',core:'Strata model',configured:'Model in startup settings',running:'Loaded model',unloaded:'Not loaded',unknown:'Unavailable',changed:'Settings differ from startup',repository:'Source',quantization:'Quantization',weights:'Weights file',revision:'Revision',context:'Context',engine:'Engine',vision:'Image input',available:'Available',off:'Disabled',workflows:'ComfyUI workflows',search:'Model or keyword',searchButton:'Search',media:'Media',mode:'Operation',all:'All',image:'Image',video:'Video',ready:'Dependencies found',missing:'Missing dependencies',invalid:'Template unavailable',standalone:'Standalone ComfyUI',managed:'Managed by DSH',details:'Location and details',models:'Missing models',nodes:'Missing nodes',prev:'Previous',next:'Next',loading:'Loading…',error:'Unable to load. Check the service and refresh.',empty:'No matching workflows.',unconfigured:'The workflow library is unconfigured.',checked:'Checked at',scope:'Execution depends on the model and available resources.'},
     };
     Object.assign(dictionaries.ja,{
-      addPrompt:'プロンプトに追加',promptAdded:'入力欄に追加しました。',promptBlocked:'入力欄に追加できません。会話と入力欄の状態を確認してください。',
+      addPrompt:'プロンプトに追加',promptAdded:'入力欄に追加しました。',promptBlocked:'入力欄に追加できません。会話と入力欄の状態を確認してください。',managedUnavailable:'DSHでは利用不可',
       resourceUse:'予想リソース消費量',modelDisk:'モデルのディスク容量',peakVram:'VRAM増加・観測最大',
       peakRam:'ComfyUIの物理RAM・観測最大',ramBudget:'Strataの常駐RAM設定',unmeasured:'未測定',
       sample:'測定条件',resourceNote:'既定フローでの参考値です。モデル、寸法、同時作業によって変動します。',
     });
     Object.assign(dictionaries.en,{
-      addPrompt:'Add to prompt',promptAdded:'Added to the message draft.',promptBlocked:'Could not add to the draft. Check the conversation and composer.',
+      addPrompt:'Add to prompt',promptAdded:'Added to the message draft.',promptBlocked:'Could not add to the draft. Check the conversation and composer.',managedUnavailable:'Unavailable in DSH',
       resourceUse:'Expected resource use',modelDisk:'Model files on disk',peakVram:'Largest sampled VRAM increase',
       peakRam:'Peak sampled ComfyUI working set',ramBudget:'Strata resident RAM setting',unmeasured:'Unmeasured',
       sample:'Measurement conditions',resourceNote:'Reference values for the default workflow. Usage varies with models, dimensions and concurrent work.',
@@ -257,6 +257,11 @@ window.__ModuleLoader__.load({
           ? `ComfyUIワークフロー「${name}」を使いたいです。モデルプロファイルは ${row.dshProfile}、操作は ${row.mode} を指定します。${check?'実行前に依存関係と利用可否を確認してください。':''}`
           : `Use the ComfyUI workflow “${name}” with model profile ${row.dshProfile} and operation ${row.mode}.${check?' Check its dependencies and availability before running it.':''}`;
       }
+      if(row.unavailableDshProfile){
+        return ja
+          ? `ワークフロー「${name}」をDSHで使いたいです。プロファイル ${row.unavailableDshProfile}、操作 ${row.mode} の登録・依存状況を確認し、必要な保守作業を教えてください。`
+          : `Check why profile ${row.unavailableDshProfile} and operation ${row.mode} are unavailable in DSH for “${name}”, and describe the maintenance needed.`;
+      }
       return ja
         ? `ComfyUI単体のワークフロー「${name}」（${row.file}）について、必要な入力素材・依存関係と実行手順を教えてください。`
         : `Explain the required inputs, dependencies and steps for the standalone ComfyUI workflow “${name}” (${row.file}).`;
@@ -264,16 +269,17 @@ window.__ModuleLoader__.load({
     function WorkflowRow({row,t,operation,onSelect}){
       const [feedback,setFeedback]=useState('');
       const state={'static-ready':'ready','dependencies-missing':'missing'}[row.state]??'invalid';
+      const route=row.dshProfile?'managed':row.unavailableDshProfile?'managedUnavailable':'standalone';
       const missing=(label,values)=>values?.length?h('div',null,t(label),h('ul',null,...values.map(value=>h('li',{key:value},value)))):null;
       return h('article',{className:'sm-job msc-row'},
         h('div',null,row.family&&row.family!==row.label?h('p',{className:'sm-muted'},row.family):null,h('h4',null,row.label)),
-        h('div',{className:'msc-badges'},badge(operation(row.mode)),badge(t(row.dshProfile?'managed':'standalone'),row.dshProfile?'active':'idle'),
+        h('div',{className:'msc-badges'},badge(operation(row.mode)),badge(t(route),row.dshProfile?'active':row.unavailableDshProfile?'warning':'idle'),
           badge(t(state),state==='ready'?'success':'warning')),
         h('div',{className:'msc-action'},h(Button,{type:'button',size:'sm',variant:'outline',onClick:()=>setFeedback(onSelect(row)?'promptAdded':'promptBlocked')},t('addPrompt')),
           h('span',{className:'sm-muted',role:'status'},feedback?t(feedback):'')),
         h(WorkflowResources,{data:row.resourceUsage,t}),
         h('details',{className:'sm-history'},h('summary',null,t('details')),h('p',null,row.file),
-          row.dshProfile?h('p',null,row.dshProfile):null,missing('models',row.missingModels),missing('nodes',row.missingNodes)));
+          row.dshProfile||row.unavailableDshProfile?h('p',null,row.dshProfile??row.unavailableDshProfile):null,missing('models',row.missingModels),missing('nodes',row.missingNodes)));
     }
     function Catalog({sessionId,useTabInfo,appendPrompt,t=key=>dictionaries.en[key]}){
       const visible=useTabInfo().tab.visible;
@@ -289,6 +295,7 @@ window.__ModuleLoader__.load({
       const core=useCatalogData('/api/local-studio/core-model',scope,enabled,revision);
       const list=useCatalogData('/api/local-studio/catalog',filters,enabled,revision);
       const last=Math.max(1,Math.ceil((list.value?.total??0)/(list.value?.limit??12)));
+      const operations=list.value?.operations??modes;
       const ja=t('mode')===dictionaries.ja.mode;
       const operation=value=>modeLabels[ja?'ja':'en'][modes.indexOf(value)]??value;
       const status=state=>h('p',{role:state.error?'alert':'status',className:state.error?'sm-notice':'sm-muted'},t(state.error?'error':'loading'));
@@ -303,7 +310,7 @@ window.__ModuleLoader__.load({
           h('div',{className:'msc-content'},h('form',{className:'msc-search',onSubmit:event=>{event.preventDefault();setQuery(draft.trim());setPage(1);}},
             h('input',{type:'search',value:draft,maxLength:80,placeholder:t('search'),'aria-label':t('search'),onChange:event=>setDraft(event.target.value)}),
             h(Button,{type:'submit',size:'sm',variant:'outline'},t('searchButton'))),
-          h('div',{className:'msc-filters'},select('media',media,setMedia,['image','video'],t),select('mode',mode,setMode,modes,operation))),
+          h('div',{className:'msc-filters'},select('media',media,setMedia,['image','video'],t),select('mode',mode,setMode,mode&&!operations.includes(mode)?[...operations,mode]:operations,operation))),
           list.value?h('div',null,...list.value.workflows.map(row=>h(WorkflowRow,{key:row.id,row,t,operation,onSelect:item=>appendPrompt(workflowPrompt(item,ja))})),
             list.value.workflows.length===0?h('p',{className:'sm-empty',role:'status'},t(list.value.state==='unconfigured'?'unconfigured':'empty')):null,
             page>1||last>1?h('nav',{className:'msc-line sm-history','aria-label':t('workflows')},button('prev',()=>setPage(n=>n-1),page===1),
