@@ -23,8 +23,9 @@ continue to identify private operational data, separately from source paths.
 Moving source must never move or overwrite existing conversations, assets,
 models, output files, credentials or process receipts.
 
-Select **Catalog** next to **Resources** in the conversation header to open its
-right-hand pane. The workflow list supports keyword, media and operation filters.
+Select **Catalog** next to **Resources** to open its right-hand pane. The buttons
+are in the conversation header, or above the composer in a new conversation.
+The workflow list supports keyword, media and operation filters.
 **Add to prompt** appends a request to the current draft and keeps its attachments.
 Managed workflows insert the exact profile and operation. Standalone entries insert
 a request for ComfyUI inputs and instructions. Send the draft when it is ready.

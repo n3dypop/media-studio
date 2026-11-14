@@ -99,6 +99,10 @@ test('Catalog is beside Resources and opens its own pane in the mounted conversa
   assert.deepEqual(buttons.map(button => button.children[0].children[1]), ['Catalog', 'Resources']);
   buttons.forEach(button => button.props.onClick());
   assert.deepEqual(opened, ['studio-catalog', 'studio-monitor']);
+  const hero = slots.find(slot => slot.name === 'conversation.hero.options');
+  assert.equal(hero.inject('current').considerAuto, undefined);
+  client.PaneButtons(hero.inject('current')).children[0].props.onClick();
+  assert.equal(opened.at(-1), 'studio-catalog');
 
   const catalog = slots.find(slot => slot.name === 'sidebar.right.pane.tab' && slot.key === 'studio-catalog');
   const { appendPrompt } = catalog.inject('current');

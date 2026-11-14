@@ -161,7 +161,7 @@ window.__ModuleLoader__.load({
     const CATALOG='studio-catalog', LOCALE='studio.catalog', CATALOG_TITLE='Catalog';
     function PaneButtons({open,considerAuto}){
       const [error,setError]=useState('');
-      useEffect(()=>{considerAuto();},[considerAuto]);
+      useEffect(()=>{considerAuto?.();},[considerAuto]);
       const button=(kind,label,title,icon)=>h(Button,{variant:'outline',size:'sm',type:'button',title,onClick:()=>{
         try{open(kind);setError('');}catch{setError('右ペインを開けません。会話を選び直してください。');}
       }},h('span',{style:{display:'inline-flex',alignItems:'center',gap:6}},h(Icon,{kind:icon}),label));
@@ -310,6 +310,10 @@ window.__ModuleLoader__.load({
     function apply(ctx){
       const considered=new Set();
       const mounted=sessionId=>ctx.sidebarRight.mounted.getSnapshot()===sessionId;
+      const openFor=sessionId=>kind=>{
+        if(!mounted(sessionId))throw Error('Conversation changed');
+        ctx.sidebarRight.openTab(kind);
+      };
       ctx.effect(()=>ctx.sidebarRightTabs.register({id:ID,kind:KIND,keepMounted:true,title:()=> 'Media & Resources',guide:[{id:ID,order:20,title:()=> 'Media & Resources',description:()=> 'Strata・ComfyUIの資源と、この会話の制作工程',icon:Icon}]}));
       ctx.effect(()=>ctx.locale.register(LOCALE,dictionaries));
       ctx.effect(()=>ctx.sidebarRightTabs.register({id:CATALOG,kind:CATALOG,title:()=>CATALOG_TITLE,
@@ -325,7 +329,7 @@ window.__ModuleLoader__.load({
       },Catalog));
       ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({name:'sidebar.right.pane.tab',key:ID,children:{'studio.monitor.production.actions':{kind:'list',scope:'session'},'studio.monitor.session.actions':{kind:'list',scope:'session'},'studio.monitor.services':{kind:'list',scope:'session'}},inject:sessionId=>({sessionId})},Monitor));
       ctx.slots.inject('conversation.session.header.utilities',()=>ctx.slots.register({name:'conversation.session.header.utilities',id:ID,order:-20,inject:sessionId=>({
-        open:kind=>{if(!mounted(sessionId))throw Error('Conversation changed');ctx.sidebarRight.openTab(kind);},
+        open:openFor(sessionId),
         considerAuto:()=>{
           if(considered.has(sessionId)||!mounted(sessionId))return;
           considered.add(sessionId);if(considered.size>256)considered.delete(considered.values().next().value);
@@ -333,6 +337,9 @@ window.__ModuleLoader__.load({
           try{const current=ctx.sidebarRight.active();if(!ctx.sidebarRight.isExpanded()&&(!current||current.kind==='guide'))ctx.sidebarRight.openTab(KIND);}catch{}
         },
       })},PaneButtons));
+      ctx.slots.inject('conversation.hero.options',()=>ctx.slots.register({
+        name:'conversation.hero.options',id:ID,order:-20,inject:sessionId=>({open:openFor(sessionId)}),
+      },PaneButtons));
       ctx.effect(()=>()=>considered.clear());
     }
     return {inject:['slots','sidebarRight','sidebarRightTabs','locale','sessions','conversation'],apply,Monitor,PaneButtons,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog,workflowPrompt};
