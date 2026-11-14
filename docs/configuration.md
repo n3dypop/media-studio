@@ -183,12 +183,14 @@ Configure a private deployment in this order:
    managed model explicitly in the profile. Keep the bearer out of the profile
    and Desktop launcher; the Controller remains responsible for resource leases
    and ownership checks.
-4. Apply the example's `local-strata` / `strata-core` policy to the native
-   `compaction-basic` entry for general conversations. The Media Studio preset has
-   its own matching policy and summarizes on the local model. With a 32,768-token
-   context and 4,096 output tokens, pressure starts at 20,480 tokens. Keep the
-   compaction and Skill isolation groups intact. For an existing full conversation,
-   use DSH's `/compact` while idle before continuing.
+4. In the native Standard preset's isolated `compaction-basic` entry, add a
+   `modelPolicies` entry for `local-strata` / `strata-core` with `thresholdRatio:
+   0.625`, `headroomTokens: 4096`, `maxTokens: 4096` and `retainTokens: 1024`.
+   Preserve the installed Standard preset's other plugins and tool-result pruner.
+   The Media Studio preset already declares the same token budget. With a
+   32,768-token context and 4,096 output tokens, pressure starts at 20,480 tokens.
+   If a full Standard conversation cannot run `/compact`, the automatic pressure
+   pass prunes long tool results before summarizing the history on the next turn.
 5. Explicitly enable the outer `preset-local-image` row and its nested
    `local-genai` row, then enable the configured gateway and desired media UI
    entries. Disabled ancestors intentionally keep their children inactive.

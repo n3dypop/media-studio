@@ -17,13 +17,3 @@
             input:
               - text
               - image
-# Reserve space before the adapter shortens the answer on local models.
-- id: compaction-basic
-  config:
-    modelPolicies:
-      - provider: local-strata
-        model: strata-core
-        thresholdRatio: 0.625
-        headroomTokens: 4096
-        maxTokens: 4096
-        retainTokens: 1024
