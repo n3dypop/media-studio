@@ -68,7 +68,7 @@ test('catalog forwarding is read-only and checks an existing conversation', asyn
 async function monitorClient(react = {}, options = {}) {
   let entry;
   const source = await readFile(new URL('../apps/dsh-plugins/studio-monitor/client.js', import.meta.url), 'utf8');
-  runInNewContext(source, { window: { ...options, __ModuleLoader__: { load: value => { entry = value; } } } });
+  runInNewContext(source, { console, window: { requestAnimationFrame() {}, cancelAnimationFrame() {}, ...options, __ModuleLoader__: { load: value => { entry = value; } } } });
   return entry.factory(id => id === 'react' ? react : { Button() {} });
 }
 
@@ -85,7 +85,7 @@ test('right-pane settings default to manual and preserve an explicit legacy choi
   assert.equal(client.readPanePreferences().open,'manual');
 });
 
-test('auto-open only uses a collapsed guide and prefers DSH horizontal placement for the second tab', async () => {
+test('auto-open uses an empty or guide-only collapsed pane and requests DSH horizontal placement for the second tab', async () => {
   const {autoOpenPanes}=await monitorClient(),opened=[];
   let expanded=false,active={kind:'guide',id:'guide'};
   const sidebar={isExpanded:()=>expanded,active:()=>active,openTab:(kind,options)=>opened.push({kind,...options})};
@@ -94,6 +94,11 @@ test('auto-open only uses a collapsed guide and prefers DSH horizontal placement
   expanded=true;autoOpenPanes(sidebar,{open:'both',placement:'catalogLeft'},true);
   expanded=false;active={kind:'files',id:'file'};autoOpenPanes(sidebar,{open:'both',placement:'catalogLeft'},true);
   assert.deepEqual(opened,[]);
+  active=undefined;
+  assert.equal(autoOpenPanes(sidebar,{open:'resources',placement:'tabs'},true),true);
+  assert.deepEqual(opened.splice(0),[{kind:'studio-monitor'}]);
+  autoOpenPanes(sidebar,{open:'both',placement:'catalogLeft'},true);
+  assert.deepEqual(opened.splice(0),[{kind:'studio-catalog'},{kind:'studio-monitor',preferNewPane:true}]);
   active={kind:'guide',id:'guide'};
   autoOpenPanes(sidebar,{open:'both',placement:'catalogLeft'},true);
   assert.deepEqual(opened.splice(0),[{kind:'studio-catalog',replaceTab:'guide'},{kind:'studio-monitor',preferNewPane:true}]);
@@ -105,6 +110,48 @@ test('auto-open only uses a collapsed guide and prefers DSH horizontal placement
   assert.deepEqual(opened,[{kind:'studio-catalog',replaceTab:'guide'}]);
 });
 
+test('auto-open reacts to conversation selection without a header and skips superseded selections', async () => {
+  const frames=new Map(),listeners=new Set(),opened=[],cleanups=[];
+  let mounted,active,expanded=false,nextFrame=0,wide=true,settings,closeSettings,saved=JSON.stringify({open:'manual',placement:'resourcesLeft'});
+  const client=await monitorClient({
+    createElement:(type,props,...children)=>({type,props,children}),
+    useState:value=>[typeof value==='function'?value():value,()=>{}],
+    useRef:current=>({current}),useEffect:callback=>{closeSettings=callback();},
+  }, {
+    localStorage:{getItem:()=>saved,setItem:(_key,value)=>{saved=value;}},
+    matchMedia:query=>({matches:query==='(min-width: 768px)'&&wide}),
+    requestAnimationFrame:callback=>{frames.set(++nextFrame,callback);return nextFrame;},
+    cancelAnimationFrame:frame=>frames.delete(frame),
+  });
+  client.apply({
+    effect:fn=>cleanups.push(fn()),locale:{register(){}},
+    slots:{inject(name,callback){if(name==='settings.general.item')callback();},register(slot,render){settings={slot,render};}},
+    sidebarRightTabs:{register(){}},
+    sidebarRight:{
+      mounted:{getSnapshot:()=>mounted,subscribe:callback=>{listeners.add(callback);return()=>listeners.delete(callback);}},
+      isExpanded:()=>expanded,active:()=>active,
+      openTab:(kind,options)=>{opened.push({session:mounted,kind,...options});active={kind};expanded=true;},
+    },
+  });
+  function select(value){mounted=value;for(const callback of listeners)callback();}
+  function paint(){const pending=[...frames.values()];frames.clear();for(const callback of pending)callback();}
+  select('first');paint();paint();assert.deepEqual(opened,[]);
+  const form=settings.render(settings.slot.inject());
+  form.children[2].children[1].props.onChange({target:{value:'both'}});
+  assert.deepEqual(opened,[]);
+  closeSettings();paint();select('new');paint();paint();
+  assert.deepEqual(opened.splice(0),[
+    {session:'new',kind:'studio-monitor'},
+    {session:'new',kind:'studio-catalog',preferNewPane:true},
+  ]);
+  expanded=false;select(undefined);select('new');paint();paint();assert.deepEqual(opened,[]);
+  active=undefined;settings.render(settings.slot.inject()).children[2].children[1].props.onChange({target:{value:'catalog'}});
+  closeSettings();paint();paint();assert.deepEqual(opened.splice(0),[{session:'new',kind:'studio-catalog'}]);
+  active=undefined;expanded=false;wide=false;select('narrow');paint();paint();assert.deepEqual(opened,[]);
+  select('pending');for(const dispose of cleanups)dispose?.();paint();paint();
+  assert.equal(listeners.size,0);assert.deepEqual(opened,[]);
+});
+
 test('Strata model cards distinguish configured, loaded, unloaded and unverified states', async () => {
   const { CoreModel, apply } = await monitorClient({
     createElement: (type, props, ...children) => ({ type, props, children }),
@@ -112,6 +159,7 @@ test('Strata model cards distinguish configured, loaded, unloaded and unverified
   let labels;
   apply({
     effect: fn => fn(),
+    sidebarRight: { mounted: { getSnapshot: () => undefined, subscribe: () => () => {} } },
     locale: { register: (_, dictionaries) => { labels = dictionaries.ja; } },
     sidebarRightTabs: { register() {} },
     slots: { inject() {} },
@@ -146,7 +194,7 @@ test('Catalog is beside Resources and opens its own pane in the mounted conversa
       draftRequests.push({ target, ...options });
       return draftResult;
     } } },
-    sidebarRight: { mounted: { getSnapshot: () => mounted }, openTab: kind => opened.push(kind) },
+    sidebarRight: { mounted: { getSnapshot: () => mounted, subscribe: () => () => {} }, openTab: kind => opened.push(kind) },
     sidebarRightTabs: { register: tab => tabs.push(tab) },
     slots: { inject: (_, register) => register(), register: (slot, render) => slots.push({ ...slot, render }) },
   });

@@ -2,7 +2,7 @@
 window.__ModuleLoader__.load({
   id:'local-studio-monitor',
   factory(require){
-    const {createElement:h,useEffect,useState}=require('react');
+    const {createElement:h,useEffect,useRef,useState}=require('react');
     const {Button}=require('@deepseek-ai/dsh-client-ui-primitives');
     const ID='local-studio-monitor',KIND='studio-monitor',CATALOG='studio-catalog',LOCALE='studio.catalog',CATALOG_TITLE='Catalog';
     const AUTO_KEY='studio-monitor.auto-open.v1',PANE_KEY='studio-monitor.pane-preferences.v1';
@@ -41,8 +41,8 @@ window.__ModuleLoader__.load({
       const {open,placement}=preferences;
       if(!wide||open==='manual'||sidebar.isExpanded())return false;
       const active=sidebar.active();
-      if(!active||active.kind!=='guide')return false;
-      const replaceGuide={replaceTab:active.id};
+      if(active&&active.kind!=='guide')return false;
+      const replaceGuide=active?{replaceTab:active.id}:undefined;
       if(open==='resources'||open==='catalog'){
         sidebar.openTab(open==='resources'?KIND:CATALOG,replaceGuide);
         return true;
@@ -52,12 +52,15 @@ window.__ModuleLoader__.load({
       sidebar.openTab(second,{preferNewPane:placement!=='tabs'});
       return true;
     }
-    function PaneSettings({t=key=>dictionaries.en[key]}){
+    function PaneSettings({t=key=>dictionaries.en[key],onPreferencesChanged}){
       const [preferences,setPreferences]=useState(readPanePreferences),[error,setError]=useState(false);
+      const changed=useRef(false);
+      useEffect(()=>()=>{if(changed.current)onPreferencesChanged();},[onPreferencesChanged]);
       function change(key,value){
         const next=panePreferences({...preferences,[key]:value});
         try{
           window.localStorage.setItem(PANE_KEY,JSON.stringify(next));
+          changed.current=true;
           setPreferences(next);setError(false);
         }catch{setError(true);}
       }
@@ -199,9 +202,8 @@ window.__ModuleLoader__.load({
       },[visible,sessionId]);
       return h(Dashboard,{state,error,now,renderActions:typeof renderSlot==='function'?job=>renderSlot('studio.monitor.production.actions',{job}):undefined,renderSessionActions:typeof renderSlot==='function'?()=>renderSlot('studio.monitor.session.actions',{}):undefined,renderServices:typeof renderSlot==='function'?()=>renderSlot('studio.monitor.services',{visible}):undefined});
     }
-    function PaneButtons({open,considerAuto,composer=false}){
+    function PaneButtons({open,composer=false}){
       const [error,setError]=useState('');
-      useEffect(()=>{considerAuto?.();},[considerAuto]);
       const button=(kind,label,title,icon)=>h(Button,{variant:'outline',size:'sm',type:'button',title,onClick:()=>{
         try{open(kind);setError('');}catch{setError('右ペインを開けません。会話を選び直してください。');}
       }},h('span',{style:{display:'inline-flex',alignItems:'center',gap:6}},h(Icon,{kind:icon}),label));
@@ -217,14 +219,14 @@ window.__ModuleLoader__.load({
       en:{description:'ComfyUI workflows and Strata model',refresh:'Refresh',core:'Strata model',configured:'Model in startup settings',running:'Loaded model',unloaded:'Not loaded',unknown:'Unavailable',changed:'Settings differ from startup',repository:'Source',quantization:'Quantization',weights:'Weights file',revision:'Revision',context:'Context',engine:'Engine',vision:'Image input',available:'Available',off:'Disabled',workflows:'ComfyUI workflows',search:'Model or keyword',searchButton:'Search',media:'Media',mode:'Operation',all:'All',image:'Image',video:'Video',ready:'Dependencies found',missing:'Missing dependencies',invalid:'Template unavailable',standalone:'Standalone ComfyUI',managed:'Managed by DSH',details:'Location and details',models:'Missing models',nodes:'Missing nodes',prev:'Previous',next:'Next',loading:'Loading…',error:'Unable to load. Check the service and refresh.',empty:'No matching workflows.',unconfigured:'The workflow library is unconfigured.',checked:'Checked at',scope:'Execution depends on the model and available resources.'},
     };
     Object.assign(dictionaries.ja,{
-      paneTitle:'Media Studioの右ペイン',open:'会話を開いたとき',placement:'両方開くときの配置',manual:'手動で開く',resources:'Media & Resources',catalog:'Catalog',both:'両方を開く',tabs:'同じペインにタブで表示',resourcesLeft:'左に Media & Resources、右に Catalog',catalogLeft:'左に Catalog、右に Media & Resources',paneHelp:'未使用の右ペインに自動展開します。画面が狭い場合は自動展開せず、分割できない場合は同じペインに表示します。',paneSaveError:'右ペインの設定を保存できませんでした。',
+      paneTitle:'Media Studioの右ペイン',open:'会話を開いたとき',placement:'両方開くときの配置',manual:'手動で開く',resources:'Media & Resources',catalog:'Catalog',both:'両方を開く',tabs:'同じペインにタブで表示',resourcesLeft:'左に Media & Resources、右に Catalog',catalogLeft:'左に Catalog、右に Media & Resources',paneHelp:'設定を閉じると、未使用の右ペインに反映します。分割の幅が足りない場合は同じペインに表示します。',paneSaveError:'右ペインの設定を保存できませんでした。',
       addPrompt:'プロンプトに追加',promptAdded:'入力欄に追加しました。',promptBlocked:'入力欄に追加できません。会話と入力欄の状態を確認してください。',managedUnavailable:'DSHでは利用不可',
       resourceUse:'予想リソース消費量',modelDisk:'モデルのディスク容量',peakVram:'VRAM増加・観測最大',
       peakRam:'ComfyUIの物理RAM・観測最大',ramBudget:'Strataの常駐RAM設定',unmeasured:'未測定',
       sample:'測定条件',resourceNote:'既定フローでの参考値です。モデル、寸法、同時作業によって変動します。',
     });
     Object.assign(dictionaries.en,{
-      paneTitle:'Media Studio right pane',open:'When opening a conversation',placement:'Layout when opening both',manual:'Open manually',resources:'Media & Resources',catalog:'Catalog',both:'Open both',tabs:'Tabs in one pane',resourcesLeft:'Media & Resources left, Catalog right',catalogLeft:'Catalog left, Media & Resources right',paneHelp:'Auto-open uses an unused right pane on wide screens. If the pane cannot split, both open as tabs.',paneSaveError:'Could not save right-pane preferences.',
+      paneTitle:'Media Studio right pane',open:'When opening a conversation',placement:'Layout when opening both',manual:'Open manually',resources:'Media & Resources',catalog:'Catalog',both:'Open both',tabs:'Tabs in one pane',resourcesLeft:'Media & Resources left, Catalog right',catalogLeft:'Catalog left, Media & Resources right',paneHelp:'Changes apply to an unused right pane after closing Settings. If there is too little room to split, both open as tabs.',paneSaveError:'Could not save right-pane preferences.',
       addPrompt:'Add to prompt',promptAdded:'Added to the message draft.',promptBlocked:'Could not add to the draft. Check the conversation and composer.',managedUnavailable:'Unavailable in DSH',
       resourceUse:'Expected resource use',modelDisk:'Model files on disk',peakVram:'Largest sampled VRAM increase',
       peakRam:'Peak sampled ComfyUI working set',ramBudget:'Strata resident RAM setting',unmeasured:'Unmeasured',
@@ -360,15 +362,31 @@ window.__ModuleLoader__.load({
           h('p',{className:'sm-footnote'},t('scope'))));
     }
     function apply(ctx){
-      const considered=new Set();
-      const mounted=sessionId=>ctx.sidebarRight.mounted.getSnapshot()===sessionId;
+      const sidebar=ctx.sidebarRight;
+      const mounted=sessionId=>sidebar.mounted.getSnapshot()===sessionId;
+      let frame;
+      const considerAuto=()=>{
+        window.cancelAnimationFrame(frame);
+        const sessionId=sidebar.mounted.getSnapshot();
+        if(!sessionId)return;
+        // The selection changes before DSH renders and adopts its per-session sidebar store.
+        frame=window.requestAnimationFrame(()=>{
+          frame=window.requestAnimationFrame(()=>{
+            if(!mounted(sessionId))return;
+            try{
+              // Below DSH's 768px breakpoint opening the sidebar covers the conversation.
+              autoOpenPanes(sidebar,readPanePreferences(),window.matchMedia('(min-width: 768px)').matches);
+            }catch(error){console.warn('Media Studio right pane could not open',error);}
+          });
+        });
+      };
       const openFor=sessionId=>kind=>{
         if(!mounted(sessionId))throw Error('Conversation changed');
         ctx.sidebarRight.openTab(kind);
       };
       ctx.effect(()=>ctx.sidebarRightTabs.register({id:ID,kind:KIND,keepMounted:true,title:()=> 'Media & Resources',guide:[{id:ID,order:20,title:()=> 'Media & Resources',description:()=> 'Strata・ComfyUIの資源と、この会話の制作工程',icon:Icon}]}));
       ctx.effect(()=>ctx.locale.register(LOCALE,dictionaries));
-      ctx.slots.inject('settings.general.item',()=>ctx.slots.register({name:'settings.general.item',id:'studio-monitor-panes',order:15,locale:LOCALE},PaneSettings));
+      ctx.slots.inject('settings.general.item',()=>ctx.slots.register({name:'settings.general.item',id:'studio-monitor-panes',order:15,locale:LOCALE,inject:()=>({onPreferencesChanged:considerAuto})},PaneSettings));
       ctx.effect(()=>ctx.sidebarRightTabs.register({id:CATALOG,kind:CATALOG,title:()=>CATALOG_TITLE,
         guide:[{id:CATALOG,order:21,title:()=>CATALOG_TITLE,description:()=>ctx.locale.bind(LOCALE)('description'),icon:()=>h(Icon,{kind:'layers'})}]}));
       ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({
@@ -385,20 +403,15 @@ window.__ModuleLoader__.load({
         name:'sidebar.right.pane.tab.title',key:CATALOG,
       },()=>CATALOG_TITLE));
       ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({name:'sidebar.right.pane.tab',key:ID,children:{'studio.monitor.production.actions':{kind:'list',scope:'session'},'studio.monitor.session.actions':{kind:'list',scope:'session'},'studio.monitor.services':{kind:'list',scope:'session'}},inject:sessionId=>({sessionId})},Monitor));
-      ctx.slots.inject('conversation.session.header.utilities',()=>ctx.slots.register({name:'conversation.session.header.utilities',id:ID,order:-20,inject:sessionId=>({
-        open:openFor(sessionId),
-        considerAuto:()=>{
-          if(considered.has(sessionId)||!mounted(sessionId))return;
-          try{
-            if(!autoOpenPanes(ctx.sidebarRight,readPanePreferences(),Boolean(window.matchMedia?.('(min-width: 1100px)').matches)))return;
-            considered.add(sessionId);if(considered.size>256)considered.delete(considered.values().next().value);
-          }catch{}
-        },
-      })},PaneButtons));
+      ctx.slots.inject('conversation.session.header.utilities',()=>ctx.slots.register({name:'conversation.session.header.utilities',id:ID,order:-20,inject:sessionId=>({open:openFor(sessionId)})},PaneButtons));
       ctx.slots.inject('conversation.input.dock',()=>ctx.slots.register({
         name:'conversation.input.dock',id:ID,order:-20,inject:sessionId=>({open:openFor(sessionId)}),
       },BlankComposerButtons));
-      ctx.effect(()=>()=>considered.clear());
+      ctx.effect(()=>{
+        const unsubscribe=sidebar.mounted.subscribe(considerAuto);
+        considerAuto();
+        return()=>{unsubscribe();window.cancelAnimationFrame(frame);};
+      });
     }
     return {inject:['slots','sidebarRight','sidebarRightTabs','locale','sessions','conversation'],apply,Monitor,PaneButtons,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog,CoreModel,workflowPrompt,PaneSettings,readPanePreferences,autoOpenPanes};
   },

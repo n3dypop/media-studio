@@ -12,8 +12,10 @@ In Web and Desktop, **Settings → General → Media Studio right pane** control
 what opens when visiting a conversation. Choose manual, either tab,
 or both. When both open, choose one tab strip or either left/right order.
 DSH applies its normal split width rule and uses one pane if a split does not
-fit. Auto-open is limited to wide screens and a collapsed guide so saved tabs
-and the user's existing layout stay in place. Preferences are stored per client.
+fit. Auto-open starts at 768 CSS pixels and uses a collapsed right pane that is
+empty or showing the guide. Existing tabs and layouts retain their placement.
+The current conversation can also use the new setting when Settings closes.
+Preferences are stored per client.
 Manual is the default. An explicitly enabled older Resources preference is kept
 until a new preference is saved.
 
