@@ -640,14 +640,15 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     operation: { type: 'string', description: 'Template operation such as t2i, edit, t2v or i2v.' },
     media: { type: 'string', enum: ['image', 'video'] },
     page: { type: 'integer', description: 'Result page starting at 1.' },
-    includeResources: { type: 'boolean', description: 'Include disk size and sampled memory when requested.' },
+    includeResources: { type: 'boolean', description: 'Omit for a normal lookup. Set true only for requested disk or memory figures.' },
   }, async (args, exec) => {
     const keys = ['query', 'media', 'page'];
     const query = new URLSearchParams(Object.fromEntries(keys.filter(key => args[key] !== undefined).map(key => [key, args[key]])));
     if (args.operation !== undefined) query.set('mode', args.operation);
     const result = await request('/api/workflow-library?' + query, { sessionId: sessionIdentity(exec), signal: exec.signal });
     if (args.includeResources === true) return result;
-    return { ...result, workflows: result.workflows.map(({ resourceUsage, ...row }) => row) };
+    const { operations, workflows, ...page } = result;
+    return { ...page, workflows: workflows.map(({ resourceUsage, ...row }) => row) };
   });
   register('local_workflow_draft', 'Validate and save a ComfyUI API graph when the request requires a permitted graph change beyond an approved template. For prompt, canvas, seed or steps with an approved legacy template, call local_image_prepare and set parameters at render. Preserve the brief and invariants.', {
     productionId: productionParameter, expectedRevision: revisionParameter,
