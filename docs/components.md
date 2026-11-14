@@ -23,6 +23,13 @@ continue to identify private operational data, separately from source paths.
 Moving source must never move or overwrite existing conversations, assets,
 models, output files, credentials or process receipts.
 
+Open **Catalog** from the right sidebar's new-tab menu. The workflow list supports
+keyword, media and operation filters. It shows local dependency checks and any
+managed DSH equivalent. The Strata section shows the model in the installation
+record and the running service's observed load state. Refresh updates both
+sections without loading models or queuing workflows. **Media & Resources**
+continues to show usage, service controls and conversation jobs.
+
 Controller changes that affect tools/catalog, workflow inputs, output evidence
 or progress must update their integration contracts and tests in the same
 revision. Service-management code also shares the Controller's process-identity

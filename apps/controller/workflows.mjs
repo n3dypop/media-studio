@@ -6,6 +6,7 @@ import {buildMossOfficialGraph,validateMossOfficialGraph,inspectMossOfficialSche
 import {QWEN21_PROFILES,buildQwen21Graph,validateQwen21Graph,resolveQwen21OwnedInputs} from './qwen21-workflow.mjs';
 import {UPSCALE_NODE_TYPES,upscaleModels,upscaleTemplate,validateUpscaleGraph} from './upscale-workflow.mjs';
 import {profileLedger,nodeLedger,coreModelLedger} from './model-ledger.mjs';
+import {comfyWorkflowLibrary} from './comfy-workflow-library.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PROFILE = 'qwen-photo-v1';
@@ -395,12 +396,14 @@ function compactDefinition(definition) {
 }
 
 export class WorkflowRegistry {
-  constructor({ root, directory, adapter,assets=null } = {}) {
+  constructor({ root, directory, adapter,assets=null,comfyUserDirectory=null,comfyModelDirectory=null } = {}) {
     if (typeof root !== 'string' || !root || !adapter?.request || !adapter?.profile) throw new TypeError('WorkflowRegistry needs a workspace root and ComfyAdapter');
     this.root = path.resolve(root);
     if (directory !== undefined && !path.isAbsolute(directory)) throw new TypeError('Workflow storage must be absolute');
     this.directory = directory ?? path.join(this.root, 'workflows', 'drafts');
     this.adapter = adapter;
+    this.comfyUserDirectory = comfyUserDirectory;
+    this.comfyModelDirectory = comfyModelDirectory;
     this.assets=assets;
     this.profileId=adapter.modelProfile??PROFILE;
     this.profiles=adapter.profiles??{[this.profileId]:{graph:adapter.profile}};
@@ -421,9 +424,14 @@ export class WorkflowRegistry {
     return objects;
   }
 
-  async catalog({modelProfile=this.profileId,mode=([UPSCALE_PROFILE,RESIZE_PROFILE].includes(modelProfile)?'upscale':[VIDEO_PROFILE_ID,H3_PROFILE_ID].includes(modelProfile)?'video':'t2i'),inputAssetId=null,sessionId=null}={}) {
+  async library(filters) {
+    return comfyWorkflowLibrary({ ...filters, userDirectory: this.comfyUserDirectory, modelDirectory: this.comfyModelDirectory, installed: () => this.installed(),
+      catalog: async objects => (await this.catalog({}, objects)).capabilities });
+  }
+
+  async catalog({modelProfile=this.profileId,mode=([UPSCALE_PROFILE,RESIZE_PROFILE].includes(modelProfile)?'upscale':[VIDEO_PROFILE_ID,H3_PROFILE_ID].includes(modelProfile)?'video':'t2i'),inputAssetId=null,sessionId=null}={}, installedObjects) {
     if(typeof modelProfile!=='string'||!/^[-a-zA-Z0-9_.]{1,100}$/.test(modelProfile)){const error=new Error('Invalid requested model profile');error.status=400;throw error;}
-    const objects = await this.installed();
+    const objects = installedObjects ?? await this.installed();
     const availableModels=profile=>profile.models.map(model => {
       const schema = objects[model.nodeType];
       const choices = comboChoices(schema?.input?.required?.[model.input]);

@@ -19,7 +19,7 @@ async function body(req, limit = 32768) {
   for await(const chunk of req) { size+=chunk.length; if(size>limit) throw new ApiError(413,'入力が大きすぎます。'); chunks.push(chunk); }
   try{return JSON.parse(Buffer.concat(chunks).toString('utf8'));}catch{throw new ApiError(400,'JSONを読み取れません。');}
 }
-export function createControllerServer({store,engine,token,dshToken,productions,workflows,gate,strata,search,assets,mossPe,mossPeEnabled=false,qwenPe,qwenPeEnabled=false,monitorTelemetry=null,monitorProgress=null,outputRoot,port,comfyUrl,profile,wireStore=null,wireReader=null,onShutdown=()=>{},experimentalHostIsolation=false}) {
+export function createControllerServer({store,engine,token,dshToken,productions,workflows,gate,strata,search,assets,mossPe,mossPeEnabled=false,qwenPe,qwenPeEnabled=false,monitorTelemetry=null,monitorProgress=null,outputRoot,port,comfyUrl,profile,wireStore=null,wireReader=null,onShutdown=()=>{},experimentalHostIsolation=false,coreCatalog}) {
   // Host isolation is not complete. Do not silently run the legacy API if an
   // operator attempts to enable it before storage and recovery are ready.
   if(experimentalHostIsolation!==false)throw new Error('Host isolation is incomplete; strict Controller startup is disabled.');
@@ -101,6 +101,10 @@ export function createControllerServer({store,engine,token,dshToken,productions,
         return json(res,200,{profiles:catalog.modelProfiles,defaultProfile:catalog.modelProfile});
       }
       if(role==='dsh'&&path.startsWith('/api/')) validateSession(req.headers['x-dsh-session']);
+      if(path==='/api/core-catalog'&&req.method==='GET'){
+        if(!coreCatalog)throw new ApiError(503,'Strataのモデル情報を確認できません。');
+        return json(res,200,await coreCatalog());
+      }
       if(path==='/api/durable-wire-proof'&&req.method==='GET'){
         if(role!=='dsh')throw new ApiError(403,'配送証拠はこの会話だけが確認できます。');
         if(!wireStore)throw new ApiError(503,'配送証拠を確認できません。');

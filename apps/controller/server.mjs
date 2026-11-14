@@ -28,6 +28,7 @@ import {strataPythonExecutable} from './service-paths.mjs';
 import {createComfyProgressMonitor} from './monitor-progress.mjs';
 import {createConfiguredNativeProbe} from './native-probe.mjs';
 import {assertNoControllerPreopenGuard} from './search/cutover-preopen-guard.mjs';
+import {strataCatalog} from './strata-catalog.mjs';
 
 if(process.env.MEDIA_STUDIO_HOME&&!isAbsolute(process.env.MEDIA_STUDIO_HOME))throw Error('MEDIA_STUDIO_HOME must be absolute');
 const packageRoot=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
@@ -72,7 +73,10 @@ try {
   const adapter=new ComfyAdapter({baseUrl:comfyUrl,outputRoot:join(root,'outputs'),profilePath:profilePaths[config.profile],modelProfile:config.profile,profilePaths,assets});
   const verifyEpoch=createEpochVerifier({runtimePath:join(root,'runtime/ComfyUI.json'),expectedExecutable:settings.comfyPythonExecutable,baseUrl:comfyUrl,...epochProbe});
   const verifyRetiredEpoch=createRetiredEpochVerifier({expectedExecutable:settings.comfyPythonExecutable,baseUrl:comfyUrl});
-  const productions=new ProductionStore(store,{defaultModelProfile:config.profile,assets}),workflows=new WorkflowRegistry({root,directory:workflowDirectory,adapter,assets});
+  const productions=new ProductionStore(store,{defaultModelProfile:config.profile,assets}),workflows=new WorkflowRegistry({
+    root,directory:workflowDirectory,adapter,assets,comfyUserDirectory:workflowDirectory ? join(settings.comfyDirectory,'user') : null,
+    comfyModelDirectory:workflowDirectory ? join(settings.comfyDirectory,'models') : null,
+  });
   const searchConfig=loadSearchConfiguration(root);
   // Search is always ownership- and handshake-protected. Legacy explicit false
   // disables search; it never selects an unprotected path. A missing probe
@@ -128,7 +132,8 @@ try {
     });
     listener.closeIdleConnections();
   };
-  server=createControllerServer({store,engine,token,dshToken,productions,workflows,search,gate,strata,assets,mossPe,mossPeEnabled:config.mossPeEnabled===true,qwenPe,qwenPeEnabled:config.qwenPeEnabled===true,monitorTelemetry,monitorProgress,wireStore,wireReader,outputRoot:join(root,'outputs'),port:config.port,comfyUrl,profile:config.profile,onShutdown:shutdown});
+  server=createControllerServer({store,engine,token,dshToken,productions,workflows,search,gate,strata,assets,mossPe,mossPeEnabled:config.mossPeEnabled===true,qwenPe,qwenPeEnabled:config.qwenPeEnabled===true,monitorTelemetry,monitorProgress,wireStore,wireReader,outputRoot:join(root,'outputs'),port:config.port,comfyUrl,profile:config.profile,onShutdown:shutdown,
+    coreCatalog:()=>strataCatalog({root,productRoot:settings.strataDirectory,strata})});
   listener.on('request',(req,res)=>server.emit('request',req,res));
   listener.requestTimeout=server.requestTimeout;listener.headersTimeout=server.headersTimeout;
   process.on('SIGINT',()=>{if(server.isIdle())shutdown();});

@@ -52,6 +52,16 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
     json(res,200,productions.abandonWorkflowFence(session,await body(req)));return true;
   }
   if(path==='/api/workflow-catalog'&&req.method==='GET') {json(res,200,await workflows.catalog({modelProfile:url.searchParams.get('modelProfile')??undefined,mode:url.searchParams.get('mode')??undefined,inputAssetId:url.searchParams.get('inputAssetId'),sessionId:session}));return true;}
+  if (path === '/api/workflow-library' && req.method === 'GET') {
+    const filters = url.searchParams, keys = ['query', 'mode', 'media', 'page', 'limit'];
+    if ([...filters.keys()].some(key => !keys.includes(key) || filters.getAll(key).length !== 1)) {
+      throw new ApiError(400, 'Invalid workflow library filter');
+    }
+    const options = Object.fromEntries([...filters].map(([key, value]) =>
+      [key, ['page', 'limit'].includes(key) ? (/^[1-9][0-9]*$/.test(value) ? Number(value) : NaN) : value]));
+    json(res, 200, await workflows.library(options));
+    return true;
+  }
   if(path==='/api/productions'&&req.method==='POST') {
     const input=await body(req);
     let result;

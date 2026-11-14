@@ -325,6 +325,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   const scopeChainOf = dependencies.scopeChainOf ?? (await (dependencies.loadDshScopeBindings??loadDshScopeBindings)(bindingOptions())).scopeChainOf;
   const templateOnly = role === 'studio' || role === 'image-generation';
   const allowedTools = new Set([...NATIVE_TOOLS.filter(name => !templateOnly || name !== 'local_workflow_draft'), ...(templateOnly ? ['local_image_prepare'] : []), ...(role === 'studio' ? ['local_moss_official_prepare','local_qwen21_prepare','local_prepared_render','local_moss_pe_start','local_moss_pe_result','local_moss_pe_decide','local_moss_pe_reconcile','local_qwen_pe_start','local_qwen_pe_result','local_qwen_pe_decide','local_qwen_pe_reconcile', 'local_input_images', 'local_asset_import', 'local_asset_view', 'local_production_iteration', 'local_production_history', 'local_production_feedback', 'local_resource_status', 'skill'] : []), 'ask_user_question']);
+  if (role === 'studio') allowedTools.add('local_workflow_library');
   for(const name of ['local_asset_reconcile','local_production_action_reconcile','local_search_reconcile','local_pe_receipt_reconcile','local_cancel_reconcile','local_mutation_pending'])allowedTools.add(name);
   const settings = await (dependencies.loadConfiguration ?? loadConfiguration)(config);
   const fetchImpl = dependencies.fetch ?? globalThis.fetch;
@@ -635,6 +636,20 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     if (role === 'image-generation') return { ...Object.fromEntries(['modelProfile','requestedProfile','requestedProfileStatus','templateStatus'].filter(key=>result[key]!==undefined).map(key=>[key,result[key]])), modelProfiles: result.modelProfiles, models: result.models, templates: result.templates?.map(({ id, available, sha256 }) => ({ id, available, sha256 })), limits: result.limits, validationScope: result.validationScope };
     const catalog = { ...Object.fromEntries(['modelProfile', 'requestedProfile', 'requestedProfileStatus', 'mode', 'capabilities', 'coreModelLedger', 'templateStatus'].filter(key => result[key] !== undefined).map(key => [key, result[key]])), modelProfiles: result.modelProfiles, models: result.models, templates: result.templates, nodeSchemas: result.nodeSchemas, limits: result.limits, validationScope: result.validationScope };
     return workflowCatalogForAgent(catalog, role);
+  });
+  register('local_workflow_library', 'Find ComfyUI templates by name, operation and media. Read dependencies and paths. Only dshProfile identifies a managed equivalent.', {
+    query: { type: 'string', description: 'Family name or keywords, for example FastH3.' },
+    operation: { type: 'string', description: 'Template operation such as t2i, edit, t2v or i2v.' },
+    media: { type: 'string', enum: ['image', 'video'] },
+    page: { type: 'integer', description: 'Result page starting at 1.' },
+    includeResources: { type: 'boolean', description: 'Include disk size and sampled memory when requested.' },
+  }, async (args, exec) => {
+    const keys = ['query', 'media', 'page'];
+    const query = new URLSearchParams(Object.fromEntries(keys.filter(key => args[key] !== undefined).map(key => [key, args[key]])));
+    if (args.operation !== undefined) query.set('mode', args.operation);
+    const result = await request('/api/workflow-library?' + query, { sessionId: sessionIdentity(exec), signal: exec.signal });
+    if (args.includeResources === true) return result;
+    return { ...result, workflows: result.workflows.map(({ resourceUsage, ...row }) => row) };
   });
   register('local_workflow_draft', 'Validate and save a ComfyUI API graph when the request requires a permitted graph change beyond an approved template. For prompt, canvas, seed or steps with an approved legacy template, call local_image_prepare and set parameters at render. Preserve the brief and invariants.', {
     productionId: productionParameter, expectedRevision: revisionParameter,

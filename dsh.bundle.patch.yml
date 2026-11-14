@@ -58,6 +58,31 @@
       disabled: true
       config:
         runtimeRoot: ABSOLUTE_PRIVATE_RUNTIME_ROOT
+    - id: preset-comfy-maintenance
+      name: '@deepseek-ai/dsh-agent-preset'
+      disabled: true
+      config:
+        id: comfy-maintenance
+        name: ComfyUI Maintenance
+        description: Search local nodes, edit workflow drafts and validate them.
+        order: 10
+        plugins:
+          - id: comfy-maintenance-persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              complete: true
+              includeRuntimeContext: false
+              prefix: Use the ComfyUI maintenance tools to search local nodes, edit workflow drafts and validate them. Keep the original and report the draft ID and validation result. Answer in the user's language.
+          - id: comfy-maintenance-mcp
+            name: '@deepseek-ai/dsh-mcp-client'
+            config:
+              transport: stdio
+              serverName: comfy_maintenance
+              command: ABSOLUTE_PYTHON_EXECUTABLE
+              args: [ABSOLUTE_SERVER_SCRIPT]
+              startupTimeoutMs: 15000
+              toolCallTimeoutMs: 35000
+              failOnStartupError: true
     - id: studio-controls
       name: ./apps/dsh-plugins/studio-controls/index.mjs
       disabled: true

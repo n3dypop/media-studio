@@ -162,9 +162,132 @@ window.__ModuleLoader__.load({
       useEffect(()=>{considerAuto();},[considerAuto]);
       return h('div',null,h(Button,{variant:'outline',size:'sm',type:'button',title:'Open Media & Resources',onClick:()=>{try{open();setError('');}catch{setError('右ペインを開けません。会話を選び直してください。');}}},h('span',{style:{display:'inline-flex',alignItems:'center',gap:6}},h(Icon,{}),'Resources')),error?h('span',{role:'status'},error):null);
     }
+    const CATALOG='studio-catalog', LOCALE='studio.catalog';
+    const dictionaries={
+      ja:{title:'カタログ',description:'ComfyUIのワークフローとStrataのモデル',refresh:'更新',core:'Strata モデル',configured:'設定されたモデル',running:'稼働中のモデル',loaded:'ロード済み',unloaded:'未ロード',unknown:'確認できません',matched:'起動時の設定と一致',changed:'起動時の設定から変更あり',repository:'配布元',quantization:'量子化',weights:'重みファイル',revision:'配布版',context:'コンテキスト',engine:'エンジン',vision:'画像入力',available:'利用可能',off:'無効',workflows:'ComfyUI ワークフロー',search:'モデル名・キーワード',searchButton:'検索',media:'メディア',mode:'操作',all:'すべて',image:'画像',video:'動画',ready:'依存関係確認済み',missing:'不足あり',invalid:'テンプレート確認不可',standalone:'ComfyUI単体',managed:'DSH管理',details:'保存場所・詳細',models:'不足モデル',nodes:'不足ノード',prev:'前へ',next:'次へ',loading:'読み込み中…',error:'取得できません。サービスの状態を確認して更新してください。',empty:'該当するワークフローはありません。',unconfigured:'ワークフロー一覧が設定されていません。',checked:'取得時刻',scope:'依存関係の確認結果を表示します。実行可否はモデルと空き資源に依存します。'},
+      en:{title:'Catalog',description:'ComfyUI workflows and Strata model',refresh:'Refresh',core:'Strata model',configured:'Configured model',running:'Running model',loaded:'Loaded',unloaded:'Unloaded',unknown:'Unavailable',matched:'Matches startup configuration',changed:'Configuration changed since startup',repository:'Source',quantization:'Quantization',weights:'Weights file',revision:'Revision',context:'Context',engine:'Engine',vision:'Image input',available:'Available',off:'Disabled',workflows:'ComfyUI workflows',search:'Model or keyword',searchButton:'Search',media:'Media',mode:'Operation',all:'All',image:'Image',video:'Video',ready:'Dependencies found',missing:'Missing dependencies',invalid:'Template unavailable',standalone:'Standalone ComfyUI',managed:'Managed by DSH',details:'Location and details',models:'Missing models',nodes:'Missing nodes',prev:'Previous',next:'Next',loading:'Loading…',error:'Unable to load. Check the service and refresh.',empty:'No matching workflows.',unconfigured:'The workflow library is unconfigured.',checked:'Checked at',scope:'Shows detected dependencies. Execution depends on the model and available resources.'},
+    };
+    Object.assign(dictionaries.ja,{
+      resourceUse:'予想リソース消費量',modelDisk:'モデルのディスク容量',peakVram:'VRAM増加・観測最大',
+      peakRam:'ComfyUIの物理RAM・観測最大',ramBudget:'Strataの常駐RAM設定',unmeasured:'未測定',
+      sample:'測定条件',resourceNote:'既定フローでの参考値です。モデル、寸法、同時作業によって変動します。',
+    });
+    Object.assign(dictionaries.en,{
+      resourceUse:'Expected resource use',modelDisk:'Model files on disk',peakVram:'Largest sampled VRAM increase',
+      peakRam:'Peak sampled ComfyUI working set',ramBudget:'Strata resident RAM setting',unmeasured:'Unmeasured',
+      sample:'Measurement conditions',resourceNote:'Reference values for the default workflow. Usage varies with models, dimensions and concurrent work.',
+    });
+    const modes=['t2i','i2i','edit','layout','depth','background-removal','upscale','t2v','i2v','pose','mixed-controlnet'];
+    const modeLabels={
+      ja:['テキスト→画像','画像→画像','画像編集','レイアウト','深度制御','背景除去','拡大','テキスト→動画','画像→動画','ポーズ制御','複数ControlNet'],
+      en:['Text to image','Image to image','Image editing','Layout','Depth control','Background removal','Upscale','Text to video','Image to video','Pose control','Mixed ControlNet'],
+    };
+    const catalogCss=`
+      .ms-catalog{display:grid;align-content:start;gap:12px;overflow:auto;height:100%;padding:12px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5;min-width:0}
+      .ms-catalog *{box-sizing:border-box}.ms-catalog h2,.ms-catalog h3,.ms-catalog p{margin:0}.ms-catalog h2{font-size:15px}.ms-catalog h3{font-size:13px}
+      .msc-panel,.msc-row{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:10px;min-width:0}.msc-panel{display:grid;gap:9px}.msc-row{display:grid;gap:5px;overflow-wrap:anywhere}
+      .msc-line,.msc-filters{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.msc-sub{color:var(--dsw-alias-label-secondary);font-size:11px}
+      .msc-fields{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 9px;margin:0}.msc-fields dt{color:var(--dsw-alias-label-secondary)}.msc-fields dd{margin:0;overflow-wrap:anywhere}
+      .msc-search{display:flex;gap:6px}.msc-search input{flex:1;min-width:0}.msc-filters label{display:grid;gap:3px;flex:1 1 100px;min-width:0}
+      .ms-catalog input,.ms-catalog select{color:inherit;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:5px 6px;font:inherit;width:100%}.ms-catalog summary{cursor:pointer}.ms-catalog ul{margin:3px 0;padding-left:18px}
+    `;
+    function useCatalogData(path,query,enabled,revision){
+      const [result,setResult]=useState(null);
+      const key=path+'?'+query;
+      useEffect(()=>{
+        if(!enabled)return;
+        const controller=new AbortController();
+        let active=true;
+        setResult({key,revision,loading:true});
+        (async()=>{
+          const response=await fetch(key,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(22000)])});
+          if(!response.ok)throw Error('Catalog unavailable');
+          const value=await response.json();
+          if(active)setResult({key,revision,value});
+        })().catch(()=>{if(active)setResult({key,revision,error:true});});
+        return()=>{active=false;controller.abort();};
+      },[key,enabled,revision]);
+      return result?.key===key&&result.revision===revision?result:{loading:true};
+    }
+    const gib=value=>typeof value==='number'?`${(value/1024**3).toLocaleString(undefined,{maximumFractionDigits:2})} GiB`:null;
+    function CoreModel({data,t}){
+      const config=data.configured, live=data.running;
+      const line=(key,value)=>value==null?null:[h('dt',{key:key+'-label'},t(key)),h('dd',{key},value)];
+      const format=value=>value==null?null:Number(value).toLocaleString();
+      return h('div',{className:'msc-panel'},
+        h('div',{className:'msc-line'},h('h3',null,t('running')),h('span',{role:'status'},t(live?.state??'unknown'))),
+        live?h('dl',{className:'msc-fields'},line('running',live.model),line('engine',live.engine),line('context',format(live.context)),line('vision',t(live.vision))):null,
+        h('h3',null,t('configured')),
+        config?h('dl',{className:'msc-fields'},line('running',config.model),line('repository',config.repository),line('quantization',config.quantization),line('weights',config.weights),line('revision',config.revision),line('context',format(config.context)),line('ramBudget',gib(config.residentRamBudgetBytes))):h('p',{className:'msc-sub'},t('unknown')),
+        data.configurationMatch!=null?h('p',{className:'msc-sub'},t(data.configurationMatch?'matched':'changed')):null,
+        data.observedAt?h('p',{className:'msc-sub'},`${t('checked')} ${clock(data.observedAt)}`):null);
+    }
+    function WorkflowResources({data,t}){
+      const runtime=data?.runtime;
+      const fields=[
+        ['modelDisk',gib(data?.modelDiskBytes)??t('unknown')],
+        ['peakVram',gib(runtime?.vramPeakDeltaBytes)??t('unmeasured')],
+        ['peakRam',gib(runtime?.ramWorkingSetPeakBytes)??t('unmeasured')],
+      ];
+      if(runtime)fields.push(['sample',[`${runtime.width}×${runtime.height}`,runtime.frames?`${runtime.frames}f`:null,
+        runtime.gpu,`${runtime.sampleIntervalMs} ms`].filter(Boolean).join(' · ')]);
+      return h('details',null,h('summary',null,t('resourceUse')),
+        h('dl',{className:'msc-fields'},...fields.flatMap(([key,value])=>[h('dt',{key:key+'-label'},t(key)),h('dd',{key},value)])),
+        h('p',{className:'msc-sub'},t('resourceNote')));
+    }
+    function WorkflowRow({row,t,operation}){
+      const state={'static-ready':'ready','dependencies-missing':'missing'}[row.state]??'invalid';
+      const missing=(label,values)=>values?.length?h('div',null,t(label),h('ul',null,...values.map(value=>h('li',{key:value},value)))):null;
+      return h('article',{className:'msc-row'},
+        h('h3',null,row.label),
+        h('p',{className:'msc-sub'},[operation(row.mode),t(row.dshProfile?'managed':'standalone'),t(state)].join(' · ')),
+        h(WorkflowResources,{data:row.resourceUsage,t}),
+        h('details',null,h('summary',null,t('details')),h('p',null,row.file),
+          row.dshProfile?h('p',null,row.dshProfile):null,missing('models',row.missingModels),missing('nodes',row.missingNodes)));
+    }
+    function Catalog({sessionId,useTabInfo,t=key=>dictionaries.en[key]}){
+      const visible=useTabInfo().tab.visible;
+      const [draft,setDraft]=useState(''),[query,setQuery]=useState(''),[media,setMedia]=useState(''),[mode,setMode]=useState('');
+      const [page,setPage]=useState(1),[revision,setRevision]=useState(0);
+      const scope=new URLSearchParams({sessionId});
+      const filters=new URLSearchParams(scope);
+      if(query)filters.set('query',query);
+      if(media)filters.set('media',media);
+      if(mode)filters.set('mode',mode);
+      filters.set('page',String(page));
+      const enabled=Boolean(visible&&sessionId);
+      const core=useCatalogData('/api/local-studio/core-model',scope,enabled,revision);
+      const list=useCatalogData('/api/local-studio/catalog',filters,enabled,revision);
+      const last=Math.max(1,Math.ceil((list.value?.total??0)/(list.value?.limit??12)));
+      const operation=value=>modeLabels[t('title')===dictionaries.ja.title?'ja':'en'][modes.indexOf(value)]??value;
+      const status=state=>h('p',{role:state.error?'alert':'status',className:'msc-sub'},t(state.error?'error':'loading'));
+      const button=(key,onClick,disabled=false)=>h(Button,{type:'button',size:'sm',variant:'outline',onClick,disabled},t(key));
+      const select=(label,value,change,options,caption)=>h('label',null,t(label),h('select',{value,onChange:event=>{change(event.target.value);setPage(1);}},
+        h('option',{value:''},t('all')),...options.map(item=>h('option',{value:item,key:item},caption(item)))));
+      return h('div',{className:'ms-catalog','data-studio-catalog':true},h('style',null,catalogCss),
+        h('div',{className:'msc-line'},h('h2',null,t('core')),button('refresh',()=>setRevision(n=>n+1),core.loading&&list.loading)),
+        core.value?h(CoreModel,{data:core.value,t}):status(core),
+        h('section',{className:'msc-panel'},h('h2',null,t('workflows')),
+          h('form',{className:'msc-search',onSubmit:event=>{event.preventDefault();setQuery(draft.trim());setPage(1);}},
+            h('input',{type:'search',value:draft,maxLength:80,placeholder:t('search'),'aria-label':t('search'),onChange:event=>setDraft(event.target.value)}),
+            h(Button,{type:'submit',size:'sm',variant:'outline'},t('searchButton'))),
+          h('div',{className:'msc-filters'},select('media',media,setMedia,['image','video'],t),select('mode',mode,setMode,modes,operation)),
+          list.value?h('div',{className:'msc-panel'},...list.value.workflows.map(row=>h(WorkflowRow,{key:row.id,row,t,operation})),
+            list.value.workflows.length===0?h('p',{role:'status'},t(list.value.state==='unconfigured'?'unconfigured':'empty')):null,
+            page>1||last>1?h('nav',{className:'msc-line','aria-label':t('workflows')},button('prev',()=>setPage(n=>n-1),page===1),
+              h('span',{className:'msc-sub'},`${page} / ${last}`),button('next',()=>setPage(n=>n+1),page>=last)):null):status(list),
+          h('p',{className:'msc-sub'},t('scope'))));
+    }
     function apply(ctx){
       const considered=new Set();
       ctx.effect(()=>ctx.sidebarRightTabs.register({id:ID,kind:KIND,keepMounted:true,title:()=> 'Media & Resources',guide:[{id:ID,order:20,title:()=> 'Media & Resources',description:()=> 'Strata・ComfyUIの資源と、この会話の制作工程',icon:Icon}]}));
+      ctx.effect(()=>ctx.locale.register(LOCALE,dictionaries));
+      const catalogText=key=>ctx.locale.bind(LOCALE)(key);
+      ctx.effect(()=>ctx.sidebarRightTabs.register({id:CATALOG,kind:CATALOG,title:()=>catalogText('title'),
+        guide:[{id:CATALOG,order:21,title:()=>catalogText('title'),description:()=>catalogText('description'),icon:()=>h(Icon,{kind:'layers'})}]}));
+      ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({
+        name:'sidebar.right.pane.tab',key:CATALOG,locale:LOCALE,inject:sessionId=>({sessionId}),
+      },Catalog));
       ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({name:'sidebar.right.pane.tab',key:ID,children:{'studio.monitor.production.actions':{kind:'list',scope:'session'},'studio.monitor.session.actions':{kind:'list',scope:'session'},'studio.monitor.services':{kind:'list',scope:'session'}},inject:sessionId=>({sessionId})},Monitor));
       ctx.slots.inject('conversation.session.header.utilities',()=>ctx.slots.register({name:'conversation.session.header.utilities',id:ID,order:-20,inject:sessionId=>({
         open:()=>{if(ctx.sidebarRight.mounted.getSnapshot()!==sessionId)throw Error('Conversation changed');ctx.sidebarRight.openTab(KIND);},
@@ -177,6 +300,6 @@ window.__ModuleLoader__.load({
       })},OpenMonitor));
       ctx.effect(()=>()=>considered.clear());
     }
-    return {inject:['slots','sidebarRight','sidebarRightTabs'],apply,Monitor,OpenMonitor,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow};
+    return {inject:['slots','sidebarRight','sidebarRightTabs','locale'],apply,Monitor,OpenMonitor,Dashboard,ResourceCard,ServiceCard,ServiceScope,Meter,UsageMeter,resourceBreakdown,Icon,elapsed,bytes,ratio,stale,stageIndex,jobRow,Catalog};
   },
 });

@@ -45,11 +45,11 @@ export function nodeLedger(type, schema = {}) {
 
 export function coreModelLedger() {
   return {
-    id: 'orcarouter-qwen3.8-flash-next-uncensored-iq3-xxs', engine: 'Strata', status: 'installation-recorded',
-    source: {url:'https://huggingface.co/orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF',revision:'98eb3357afd966c25cadd082c7f830eafde7aa52',evidence:'docs/reports/strata-orca-pack-2026-11-03.json'},
-    license: {id:'unknown',note:'Model and component terms need independent verification.'},
+    id: 'strata-core', engine: 'Strata', status: 'see-core-catalog',
+    source: null,
+    license: {id:'unknown',note:'Consult the configured model source.'},
     modes: ['planning','workflow-design','image-review'],
-    compatibility: 'Recorded Strata configuration: context 32768, vision CPU, one parallel request; check live provider status separately.',
+    compatibility: 'The core catalog reports the current installation and observed load status.',
     memory: {estimatedPeakBytes:null,observed:[]},
   };
 }
