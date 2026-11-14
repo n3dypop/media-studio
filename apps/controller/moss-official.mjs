@@ -82,6 +82,12 @@ function validEncodedBoxes(inputs){
   }catch{return false;}
 }
 
+export function validateMossCanvas(request) {
+  const width=integer(request.width??1024,'width',256,4096),height=integer(request.height??1024,'height',256,4096);
+  if(width%16||height%16||width*height>MAX_PIXELS)fail('MOSS canvas must be 16-pixel aligned and no larger than 4,194,304 pixels');
+  return {width,height};
+}
+
 /** Construct a graph solely from a declarative request. Array order is the
  * generator-input order; no raw path, node graph, URL or observation-only
  * reference is accepted. Caller must persist the validated request and hashes. */
@@ -94,8 +100,7 @@ export function buildMossOfficialGraph(request,{outputPrefix='controller/templat
   const mode=request.mode??'t2i';if(!MOSS_OFFICIAL_MODES.includes(mode))fail('Unsupported MOSS official mode');
   if(['depth','edit'].includes(mode)&&request.modelProfile!=='moss-image-sft-official-v1')fail('Official edit and depth workflows are qualified for SFT only');
   const prompt=text(request.prompt,'prompt'),negative=text(request.negativePrompt??'','negativePrompt',3000,true);
-  const width=integer(request.width??1024,'width',256,4096),height=integer(request.height??1024,'height',256,4096);
-  if(width%16||height%16||width*height>MAX_PIXELS)fail('MOSS canvas must be 16-pixel aligned and no larger than 4,194,304 pixels');
+  const {width,height}=validateMossCanvas(request);
   if(typeof request.seed!=='string'||!/^(0|[1-9]\d{0,15})$/.test(request.seed)||BigInt(request.seed)>BigInt(Number.MAX_SAFE_INTEGER))fail('Invalid seed');
   const seed=Number(request.seed),steps=integer(request.steps??(mode==='edit'?30:25),'steps',1,10000),cfg=number(request.cfg??(mode==='edit'?4:mode==='depth'?3:2.5),'cfg',0,100);
   const sampler=request.sampler??(mode==='edit'?'euler':'er_sde'),scheduler=request.scheduler??(mode==='edit'?'normal':'simple');

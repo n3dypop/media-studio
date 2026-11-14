@@ -13,6 +13,7 @@ const nodeName = /^[A-Za-z][A-Za-z0-9_]{0,99}$/;
 const modelName = /^(?:[\w.-]+\/)*[\w.-]+\.(?:safetensors|pth|gguf)$/i;
 const bounded = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max;
 const normalize = value => String(value).replaceAll('\\', '/');
+const normalizedReference = value => normalize(value.normalize('NFKC')).toLowerCase();
 const registeredNode = (objects, name) => Object.hasOwn(objects, name) && objects[name]?.api_node !== true && objects[name]?.dev_only !== true;
 
 async function readLocalFile(root, relative, maxBytes) {
@@ -125,10 +126,36 @@ async function inspectWorkflow(root, entry, objects, resources, detailed) {
     ...(missingNodes.length && { missingNodes }), ...(missingModels.length && { missingModels }) };
 }
 
-export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, installed, catalog, id, query, mode, media, details, page = 1, limit = 12 }) {
+function referencedWorkflowIds(workflows, reference) {
+  const text = normalizedReference(reference);
+  const ranges = new Map();
+  for (const {id, family, label, file} of workflows) {
+    const fullLabel = normalizedReference(label).startsWith(normalizedReference(family)) ? label : `${family} ${label}`;
+    for (const name of new Set([id, fullLabel, file, path.posix.basename(file)].map(normalizedReference))) {
+      const literal = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      for (const {index} of text.matchAll(new RegExp(`(?<![a-z0-9_-])${literal}(?![a-z0-9_-])`, 'g'))) {
+        const end = index + name.length, key = `${index}:${end}`;
+        if (!ranges.has(key)) ranges.set(key, {start:index, end, ids:new Set()});
+        ranges.get(key).ids.add(id);
+      }
+    }
+  }
+  // Prefer a full path or longer workflow name over a nested alias.
+  const result = new Set();
+  let end = -1;
+  for (const match of [...ranges.values()].sort((a,b)=>a.start-b.start || b.end-a.end)) {
+    if (match.end <= end) continue;
+    end = match.end;
+    for (const id of match.ids) result.add(id);
+  }
+  return result;
+}
+
+export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, installed, catalog, id, query, reference, mode, media, details, page = 1, limit = 12 }) {
   const locator = typeof id === 'string' ? normalize(id) : '';
   if ((id !== undefined && ((!workflowLibraryId.test(locator) && (!bounded(locator, 256) || !workflowLibraryFile.test(locator))) || query !== undefined || page !== 1)) ||
     (query !== undefined && !bounded(query, WORKFLOW_QUERY_LIMIT)) || (mode !== undefined && !/^[a-z0-9-]{1,24}$/.test(mode))
+    || (reference !== undefined && (!bounded(reference, 8000) || id !== undefined || query !== undefined || page !== 1))
     || (media !== undefined && !['image', 'video'].includes(media)) || (details !== undefined && details !== 'unique') || !Number.isSafeInteger(page) || page < 1
     || !Number.isSafeInteger(limit) || limit < 1 || limit > 25) throw new ApiError(400, 'Invalid workflow library filter');
   const empty = { workflows: [], total: 0, page, limit };
@@ -151,10 +178,11 @@ export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, inst
   }
   const searchable = value => value.normalize('NFKC').toLowerCase().replace(/[\/\\_.-]+/g, ' ');
   const terms = query ? searchable(query).trim().split(/\s+/).filter(Boolean) : [];
+  const referencedIds = reference === undefined ? null : referencedWorkflowIds(index.workflows, reference);
   const operations = [...new Set(index.workflows.map(entry => entry.mode))].sort();
   const entries = index.workflows.filter(entry => {
     const text = searchable([entry.id, entry.family, entry.label, entry.file, entry.mode, entry.profile, ...entry.models.map(model => model.name)].join(' '));
-    return (!locator || entry.id === locator || entry.file === locator) && (!mode || mode === entry.mode) && (!media || media === entry.media) && terms.every(term => text.includes(term));
+    return (!referencedIds || referencedIds.has(entry.id)) && (!locator || entry.id === locator || entry.file === locator) && (!mode || mode === entry.mode) && (!media || media === entry.media) && terms.every(term => text.includes(term));
   }).sort((a, b) => a.family.localeCompare(b.family) || a.id.localeCompare(b.id));
   const selected = entries.slice((page - 1) * limit, page * limit);
   if (!selected.length) return { ...empty, state: 'configured', operations, total: entries.length };

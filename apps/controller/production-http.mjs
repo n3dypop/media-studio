@@ -52,6 +52,12 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
     json(res,200,productions.abandonWorkflowFence(session,await body(req)));return true;
   }
   if(path==='/api/workflow-catalog'&&req.method==='GET') {json(res,200,await workflows.catalog({modelProfile:url.searchParams.get('modelProfile')??undefined,mode:url.searchParams.get('mode')??undefined,inputAssetId:url.searchParams.get('inputAssetId'),sessionId:session}));return true;}
+  if (path === '/api/workflow-library/selection' && req.method === 'POST') {
+    const input = await body(req, 65536);
+    if (url.search || typeof input?.reference !== 'string') throw new ApiError(400, 'A workflow reference is required');
+    const result = await workflows.library({reference:input.reference,limit:25});
+    json(res,200,{state:result.state,total:result.total,workflows:result.workflows.map(({id,label,mode,file,dshProfile,unavailableDshProfile,state})=>({id,label,mode,file,dshProfile,unavailableDshProfile,state}))});return true;
+  }
   if (path === '/api/workflow-library' && req.method === 'GET') {
     const filters = url.searchParams, keys = ['id', 'query', 'mode', 'media', 'details', 'page', 'limit'];
     if ([...filters.keys()].some(key => !keys.includes(key) || filters.getAll(key).length !== 1)) {

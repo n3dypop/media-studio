@@ -64,6 +64,10 @@ test('ComfyUI library filters and pages templates without promoting them to mana
   assert.equal((await comfyWorkflowLibrary({ ...options, query: 'FastH3/t2v.json' })).total, 1);
   await assert.rejects(comfyWorkflowLibrary({ ...options, id: '../t2v' }), { status: 400 });
   await assert.rejects(comfyWorkflowLibrary({ ...options, limit: 26 }), { status: 400 });
+  assert.deepEqual((await comfyWorkflowLibrary({ ...options, reference: `「${video.id.toUpperCase()}」を使う` })).workflows.map(row => row.id), [video.id]);
+  assert.deepEqual((await comfyWorkflowLibrary({ ...options, reference: `Use ${video.file.replaceAll('/', '\\')}` })).workflows.map(row => row.id), [video.id]);
+  assert.equal((await comfyWorkflowLibrary({ ...options, reference: `skip-${video.id}` })).total, 0);
+  await assert.rejects(comfyWorkflowLibrary({ ...options, reference: video.id, query: 'other' }), { status: 400 });
 });
 
 test('DSH library tool forwards a video operation as a read-only query', async t => {
@@ -124,13 +128,18 @@ test('DSH library tool forwards a video operation as a read-only query', async t
   await tool.execute({ id: 'a-different-workflow', query: 'wrong name', page: 3 }, exec);
   assert.equal(seen.at(-1)[3], 'video');
   assert.equal(contexts.length, 2);
+  const create = plugin.tools.find(tool => tool.name === 'local_production_create');
+  const blocked = await create.execute({ request: 'Edit a cup.', modelProfile: 'moss-image-sft-official-v1', mode:'edit' }, exec);
+  assert.equal(blocked.status, 'workflow_unavailable_in_dsh');
+  assert.equal(blocked.workflow.id, 'video');
+  assert.deepEqual(seen.filter(([method]) => method === 'POST'), [['POST', '/api/workflow-library/selection', null, null]]);
 });
 
 test('a MiniMax H3 edit lookup reports the saved template inputs and defaults', async t => {
   const userDirectory = await mkdtemp(path.join(tmpdir(), 'media-studio-h3-edit-library-'));
   t.after(() => rm(userDirectory, { recursive: true, force: true }));
-  const entry = { id: 'minimax-h3-image-edit', family: 'MiniMax H3 Image', label: 'Image Edit',
-    mode: 'edit', media: 'image', file: 'Media Studio/MiniMax H3 Image/edit.json', models: [] };
+  const entry = { id: 'minimax-h3-image-edit', family: 'MiniMax H3 Image', label: 'MiniMax H3 Image Edit',
+    mode: 'edit', media: 'image', file: 'Media Studio/MiniMax H3 Image/image_minimax_h3_image_edit.json', models: [] };
   const graphPath = path.join(userDirectory, 'default/workflows', entry.file);
   await mkdir(path.dirname(graphPath), { recursive: true });
   await mkdir(path.join(userDirectory, 'media-studio'));
@@ -146,10 +155,16 @@ test('a MiniMax H3 edit lookup reports the saved template inputs and defaults', 
   ];
   await writeFile(graphPath, JSON.stringify({ nodes }));
   await writeFile(path.join(userDirectory, 'media-studio/workflow-catalog.json'), JSON.stringify({ version: 1, workflows: [entry] }));
-  const [row] = (await comfyWorkflowLibrary({ userDirectory, id: entry.id,
-    installed: async () => Object.fromEntries(nodes.map(({ type }) => [type, {}])) })).workflows;
+  const options = { userDirectory, installed: async () => Object.fromEntries(nodes.map(({ type }) => [type, {}])) };
+  const [row] = (await comfyWorkflowLibrary({ ...options, id: entry.id })).workflows;
   assert.equal(row.state, 'static-ready');
   assert.equal(row.dshProfile, undefined);
+  for (const reference of ['MiniMax H3 Image editでマグカップを編集', 'image_minimax_h3_image_edit.jsonは使えますか？']) {
+    const selection = await comfyWorkflowLibrary({ ...options, reference });
+    assert.equal(selection.total, 1);
+    assert.equal(selection.workflows[0].id, entry.id);
+    assert.equal(selection.workflows[0].dshProfile, undefined);
+  }
   assert.deepEqual(row.details.inputs, ['LoadImage']);
   assert.deepEqual(row.details.outputs, ['SaveImage']);
   assert.equal(row.details.promptEnhancerEnabled, false);

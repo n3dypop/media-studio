@@ -12,6 +12,7 @@ import {deliveryPosition, singleVisibleImageDelivery, visibleDelivery} from './e
 import {createRuntimeConfig,runtimeRootOf} from '../shared/plugin-config.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
 import {createDurableRuntime} from './durable-runtime.mjs';
+import {validateMossCanvas} from '../../controller/moss-official.mjs';
 import { MOSS_OFFICIAL_IDS, QWEN21_OFFICIAL_IDS, WORKFLOW_QUERY_LIMIT, workflowLibraryFile, workflowLibraryId, MODEL_PROFILES as KNOWN_PROFILES,
   activeModelProfiles as MODEL_PROFILES, MEDIA_MODES as MODES } from '../../controller/media-modes.mjs';
 
@@ -49,8 +50,8 @@ For outside facts, local_search_propose records exact queries or returned page U
 Respect cancellation immediately. The CPU controller retains outputs and performs cleanup after a stop request. Only explicitly approved search queries and page URLs may leave through these search tools. No tool grants permission to install, download files, delete, send other conversation content/images externally, or modify code outside a separately reviewed development change.`;
 
 export class ControllerError extends Error {
-  constructor(message, { status = null, uncertain = false, requestId = null } = {}) {
-    super(message); this.name = 'ControllerError'; this.status = status; this.uncertain = uncertain; this.requestId = requestId;
+  constructor(message, { status = null, uncertain = false, requestId = null, receipt = null } = {}) {
+    super(message); this.name = 'ControllerError'; this.status = status; this.uncertain = uncertain; this.requestId = requestId; this.receipt = receipt;
   }
 }
 
@@ -346,15 +347,16 @@ export async function createPlugin(ctx, config, dependencies = {}) {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       if (!response.ok) {
-        let diagnostic = '';
+        let diagnostic = '', receipt = null;
         try {
           if (response.headers.get('content-type')?.split(';')[0] === 'application/json') {
             const errorBody = JSON.parse(new TextDecoder().decode(await boundedBytes(response, 16384, requestSignal)));
             if (typeof errorBody?.error === 'string') diagnostic = boundedDiagnostic(errorBody.error, settings.token);
+            if (path === '/api/workflows/draft' && errorBody.receipt?.state === 'rejected') receipt = errorBody.receipt;
           }
         } catch { /* A malformed/oversized error body must not change its known HTTP outcome. */ }
         finally { await response.body?.cancel().catch(() => {}); }
-        throw new ControllerError(`Controller rejected the request (HTTP ${response.status}).${diagnostic ? ` Diagnostic: ${diagnostic}` : ''}`, { status: response.status, uncertain: method === 'POST' && response.status >= 500, requestId: body?.requestId });
+        throw new ControllerError(`Controller rejected the request (HTTP ${response.status}).${diagnostic ? ` Diagnostic: ${diagnostic}` : ''}`, { status: response.status, uncertain: method === 'POST' && response.status >= 500, requestId: body?.requestId, receipt });
       }
       const bytes = await boundedBytes(response, binary ? MAX_IMAGE_BYTES : MAX_RESPONSE_BYTES, requestSignal);
       if (binary) return bytes;
@@ -503,6 +505,25 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     }
   }
 
+  async function checkRequestedWorkflow(args, exec) {
+    if (role !== 'studio') return null;
+    const reference = currentUserRequest(exec.agent.session);
+    if (!reference) return null;
+    const result = await request('/api/workflow-library/selection', {
+      sessionId: sessionIdentity(exec), method:'POST', body:{reference}, signal:exec.signal,
+    });
+    if (result.total > 1) return { status:'workflow_selection_required', workflows:result.workflows.slice(0,8),
+      guidance:'Ask which named workflow to use before creating a production. No production was created.' };
+    const [selected] = result.workflows;
+    if (selected && !selected.dshProfile) return { status:'workflow_unavailable_in_dsh', workflow:selected,
+      guidance:'Explain the standalone ComfyUI status and maintenance handoff. No production was created. Use an alternative only after the user explicitly selects it in a new request.' };
+    if (selected && ((args.modelProfile && args.modelProfile !== selected.dshProfile) || (args.mode ?? 't2i') !== selected.mode)) {
+      return { status:'workflow_selection_mismatch', workflow:selected,
+        guidance:'Use the selected workflow’s model profile and operation. No production was created.' };
+    }
+    return selected ? { modelProfile:selected.dshProfile } : null;
+  }
+
   async function checkOfficialPreparation(args, exec, tool) {
     const result = await request(`/api/productions/${encodeURIComponent(args.productionId)}`, { sessionId: sessionIdentity(exec), signal: exec.signal });
     const production = productionValue(result);
@@ -512,6 +533,12 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       throw new ControllerError(`This tool or its model/mode does not match the saved production. No workflow was submitted. Follow ${JSON.stringify(next)} and supply its remaining required settings.`);
     }
     requireRequestedSize(result.production, args.official);
+    if (tool === 'local_moss_official_prepare') {
+      try { validateMossCanvas(args.official); }
+      catch {
+        throw new ControllerError('MOSS canvas dimensions must each be 256–4096 and divisible by 16, with at most 4,194,304 pixels. Use aligned values when size is flexible. Ask before changing an explicit size. No workflow was submitted.');
+      }
+    }
   }
 
   function register(toolName, description, parameters, execute, activation) {
@@ -596,10 +623,18 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     peInputAssetIds: { type: 'array', items: { type: 'string' }, description: 'MOSS t2i/layout only: optional one explicitly imported input-purpose image used only by prompt enhancement. Separate asset ID from generator inputs and observation references.' },
     referenceAssetIds: { type: 'array', items: { type: 'string' }, description: 'Imported references for interpretation/evaluation only, not automatic generator inputs.' },
   }, async (args, exec) => {
+    const selected = await checkRequestedWorkflow(args, exec);
+    if (selected?.status) return selected;
+    for (const field of ['requiredConditions', 'preferredConditions', 'avoid', 'steps']) {
+      if (args[field] !== undefined && (!Array.isArray(args[field]) || args[field].some(value => typeof value !== 'string'))) {
+        throw new ControllerError(`Pass ${field} as an array of strings, or omit it if unused. No production was created.`);
+      }
+    }
     const message = role === 'studio' && (args.mode ?? 't2i') === 't2i' ? currentUserRequest(exec.agent.session) : null;
     const sourceRequest = requestedPngSize(message) ? message : args.request;
     if (!sourceRequest?.trim()) throw new ControllerError('Pass the nonempty user request. No production was created.');
-    const result = await mutate('/api/productions', { requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'create'), brief: { request: sourceRequest, criteria: args.criteria, invariants: args.invariants, ...Object.fromEntries(['mode', 'inputAssetId', 'inputAssetIds', 'peInputAssetIds', 'referenceAssetIds', 'requiredConditions', 'preferredConditions', 'avoid', 'usage', 'steps'].filter(key => args[key] !== undefined).map(key => [key, args[key]])) }, ...(args.modelProfile === undefined ? {} : { modelProfile: args.modelProfile }) }, exec);
+    const modelProfile = selected?.modelProfile ?? args.modelProfile;
+    const result = await mutate('/api/productions', { requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'create'), brief: { request: sourceRequest, criteria: args.criteria, invariants: args.invariants, ...Object.fromEntries(['mode', 'inputAssetId', 'inputAssetIds', 'peInputAssetIds', 'referenceAssetIds', 'requiredConditions', 'preferredConditions', 'avoid', 'usage', 'steps'].filter(key => args[key] !== undefined).map(key => [key, args[key]])) }, ...(modelProfile === undefined ? {} : { modelProfile }) }, exec);
     return createdProduction(result);
   });
   register('local_production_reconcile_create', 'Read and verify one previously uncertain production create using its exact request ID. Never resend the create. Missing or mismatched evidence remains unresolved.', {
@@ -703,6 +738,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     mode: modeParameter, inputAssetId: { type: 'string', description: 'The production fixed generator input asset, if any.' },
   }, async (args, exec) => {
     const result = await mutate('/api/workflows/draft', {...args,requestId:requestIdFor(sessionIdentity(exec),exec.callId,'workflow')}, exec);
+    if (result.state === 'rejected') return result;
     return { production: productionValue(result), workflow: workflowMetadata(result.workflow), validation: result.validation };
   });
   register('local_moss_official_prepare', 'Prepare only moss-image-sft-official-v1 or moss-image-base-official-v1 as directed by the saved production. Saves without generating. Set prompt, negativePrompt, seed, canvas and steps in official, then use the returned next action. Optional PE is a separate stage.', {
@@ -713,6 +749,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   }, async (args, exec) => {
     await checkOfficialPreparation(args, exec, 'local_moss_official_prepare');
     const result = await mutate('/api/workflows/draft', { ...args, requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'workflow') }, exec);
+    if (result.state === 'rejected') return result;
     const w = result.workflow;
     return { ...preparedWorkflowResult(result, role), renderParameters: Object.fromEntries(['prompt','negativePrompt','seed','width','height','steps'].map(k=>[k,w.request[k]??({negativePrompt:'',width:1024,height:1024,steps:w.mode==='edit'?30:25}[k])])) };
   });
@@ -724,6 +761,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   }, async (args, exec) => {
     await checkOfficialPreparation(args, exec, 'local_qwen21_prepare');
     const result = await mutate('/api/workflows/draft', { ...args, requestId: requestIdFor(sessionIdentity(exec), exec.callId, 'workflow') }, exec);
+    if (result.state === 'rejected') return result;
     const w = result.workflow;
     return { ...preparedWorkflowResult(result, role), renderParameters: { prompt: w.request.prompt, negativePrompt: w.request.negativePrompt ?? '', seed: w.request.seed ?? '42', width: w.output.width, height: w.output.height, steps: w.request.steps ?? (w.request.variant === 'turbo' ? 8 : 25) }, negativePromptEffective: w.negativePromptEffective };
   });
@@ -811,6 +849,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       if (received.id !== production.id || received.modelProfile !== production.modelProfile || received.revision !== args.expectedRevision + 1
         || typeof value.workflow?.id !== 'string' || value.workflow.modelProfile !== production.modelProfile || !/^[a-f0-9]{64}$/.test(value.workflow.sha256 ?? '')) throw new Error('Mismatched prepared workflow receipt');
     } });
+    if (result.state === 'rejected') return result;
     const prepared = preparedWorkflowResult(result, role);
     const size = requiredOutputSize(saved.production);
     if (size) Object.assign(prepared.next.args, size);

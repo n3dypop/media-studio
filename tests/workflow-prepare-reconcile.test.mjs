@@ -62,6 +62,55 @@ test('invalid workflow has a durable rejected receipt and can be corrected with 
   const fixed=await f.post('/api/workflows/draft',f.draft(randomUUID()));assert.equal(fixed.status,201,await fixed.text());
 });
 
+test('DSH distinguishes a verified canvas rejection from an unverifiable response',async t=>{
+  const f=await setup(t);
+  for(const tamper of [false,true]){
+    const base=await realpath(parent),root=await mkdtemp(join(base,'review-workflow-rejection-'));
+    await mkdir(join(root,'data'));
+    const journal=await openMutationJournal(root);
+    t.after(async()=>{journal.close();assert.equal(await realpath(root),root);assert.ok(root.startsWith(base+sep));await rm(root,{recursive:true,force:true});});
+    const name='local_moss_official_prepare',callId='prepare';
+    const events=[{seq:0,type:'tool/call',data:{callId,name,turn:1,step:1}}];
+    const session={id:'review-session',surface:{nodes:[]},snapshotEvents:()=>events,deriveMessages:()=>[]};
+    const sessions={flush:async()=>true};
+    const persistence={flush:async()=>{},open:async(id,access)=>({id,access,read:async()=>({events}),close:async()=>{}})};
+    const requestId=randomUUID(),valid=f.draft(requestId),input={...valid,official:{...valid.official,width:1344,height:756}};
+    let posts=0,reads=0;
+    const run=runDurableOwnedMutation({journal,session,sessions,persistence,mapSessionId:id=>id,currentCallId:callId,toolName:name,
+      operation:'workflow-draft',targetId:f.p.id,input,correlationHash:digest({expectedRevision:input.expectedRevision}),wireProof:async()=>true,
+      async send(){
+        posts++;
+        const response=await f.post('/api/workflows/draft',input);
+        assert.equal(response.status,400);
+        const {receipt,error}=await response.json();
+        return {receipt,diagnostic:error};
+      },
+      async readProof(intent,direct){
+        reads++;
+        assert.equal(intent.requestId,requestId);
+        assert.equal(direct.receipt.state,'rejected');
+        const response=await f.get(`/api/workflow-requests/by-request?requestId=${requestId}`);
+        assert.equal(response.status,200);
+        const proof=await response.json();
+        if(tamper)proof.receipt.payloadHash='0'.repeat(64);
+        return proof;
+      },
+    });
+    if(tamper){
+      await assert.rejects(run,/unresolved/i);
+      assert.equal(journal.pending(session.id)[0].state,'intent');
+    }else{
+      const result=await run;
+      assert.equal(result.value.state,'rejected');
+      assert.match(result.value.diagnostic,/16-pixel aligned/);
+      assert.equal(journal.pending(session.id)[0].outcome,'rejected');
+    }
+    assert.equal(posts,1);
+    assert.equal(reads,1);
+    assert.equal(f.productions.get(f.p.id,session.id).revision,0);
+  }
+});
+
 test('durable DSH coordinator resolves the same saved workflow after HTTP reply loss without another draft',async t=>{
   const f=await setup(t),base=await realpath(parent),root=await mkdtemp(join(base,'review-workflow-journal-'));assert.ok(root.startsWith(base+sep));await mkdir(join(root,'data'));let journal=await openMutationJournal(root),posts=0,gets=0,tamper=false;
   t.after(async()=>{journal.close();assert.equal(await realpath(root),root);assert.ok(root.startsWith(base+sep));await rm(root,{recursive:true,force:true});});

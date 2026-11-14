@@ -45,7 +45,13 @@ export async function runDurableOwnedMutation({journal,session,sessions,persiste
   let trusted;
   const result=await performDurableMutation({journal,session,sessions,persistence,mapSessionId,currentCallId,toolName,operation,requestId:input.requestId,input,correlationHash,targetId,send,wireProof,
     async verifyReceipt(response,{sessionId,intent}){
-      const observed=await readProof(intent),proof=proofFor(intent,sessionId,observed);
+      const rejected=operation==='workflow-draft'&&response?.receipt?.state==='rejected';
+      const observed=await readProof(intent,rejected?response:undefined),proof=proofFor(intent,sessionId,observed);
+      if(rejected){
+        if(observed.receipt?.state!=='rejected'||proofFor(intent,sessionId,{receipt:response.receipt}).receiptHash!==proof.receiptHash)throw Error('The direct rejection differs from the saved receipt');
+        trusted={state:'rejected',requestId:intent.requestId,diagnostic:response.diagnostic,guidance:'No workflow was saved by this request. Correct the reported setting before preparing again. If the setting is a user requirement, ask before changing it.'};
+        return proof;
+      }
       if(operation==='create'&&response?.production?.id!==observed?.productions?.[0]?.id||operation==='asset-import'&&response?.asset?.id!==observed?.asset?.id||operation==='workflow-draft'&&response?.workflow?.id!==observed?.workflow?.id||operation==='prepared-render'&&response?.run?.id!==observed?.run?.id||operation==='evaluate'&&response?.evaluation?.id!==observed?.evaluation?.id||operation==='iteration'&&response?.plan?.id!==observed?.plan?.id||operation==='feedback'&&response?.feedback?.id!==observed?.feedback?.id)throw Error('The direct response differs from the saved receipt');
       if(operation==='search-proposal'&&response?.proposal?.id!==observed?.proposal?.id)throw Error('The direct search response differs from the saved receipt');
       if(operation==='render'&&response?.run?.id!==observed?.run?.id)throw Error('The direct render response differs from the saved receipt');

@@ -81,7 +81,17 @@ export async function createDurableRuntime({root,ctx,sessionIdentity,mapSessionI
         if(!/^[a-f0-9]{64}$/.test(originalSha256??'')||!['input','reference'].includes(body.purpose))throw errorFactory('The original image cannot be identified; no import was sent.',{uncertain:false});
         correlationHash=digest({purpose:body.purpose,originalSha256});
       }
-      const common={journal,session:exec.agent.session,sessions:ctx.sessions,persistence:ctx.sessionPersistence,mapSessionId,currentCallId:exec.callId,toolName:exec.name,targetId,input:body,send:async()=>{const value=await request(path,{sessionId,method:'POST',body,signal});validateResult(value);return value;},readProof:()=>read(proofPath(operation,targetId,body.requestId),exec,signal)};
+      const common={journal,session:exec.agent.session,sessions:ctx.sessions,persistence:ctx.sessionPersistence,mapSessionId,currentCallId:exec.callId,toolName:exec.name,targetId,input:body,send:async()=>{
+        let value;
+        try{value=await request(path,{sessionId,method:'POST',body,signal});}
+        catch(error){
+          if(operation!=='workflow-draft'||error.status!==error.receipt?.httpStatus||error.receipt?.state!=='rejected')throw error;
+          return {receipt:error.receipt,diagnostic:error.message};
+        }
+        validateResult(value);return value;
+      },readProof:(_intent,direct)=>read(operation==='workflow-draft'&&direct?.receipt?.state==='rejected'
+        ? '/api/workflow-requests/by-request?'+new URLSearchParams({requestId:body.requestId})
+        : proofPath(operation,targetId,body.requestId),exec,signal)};
       try{
         const result=operation==='cancel'?await runDurableCancellation(common):await runDurableOwnedMutation({...common,operation,correlationHash,wireProof:wireProof(exec,signal)});
         remember(exec.callId,result.journalReceipt);return result.value;
