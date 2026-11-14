@@ -150,14 +150,6 @@ try {
         }
 
         if (Test-LocalPort $port) { throw "Port $port is occupied. No existing process was changed." }
-        if ($name -eq 'DSH') {
-            # The public DSH API does not own permanent session disposal. Apply only
-            # explicit, cancellable Session Library requests before any Host writer exists.
-            $sessionDeletionHelper = if ($settings.dshPluginsDirectory) { Join-Path ([IO.Path]::GetFullPath([string]$settings.dshPluginsDirectory)) 'scripts/maintenance/Apply-SessionDeletions.mjs' } else { Get-ProjectPath 'scripts/maintenance/Apply-SessionDeletions.mjs' }
-            if (-not (Test-Path -LiteralPath $sessionDeletionHelper -PathType Leaf)) { throw 'Session Library startup helper is missing.' }
-            & $executable $sessionDeletionHelper --root $taskRoot
-            if ($LASTEXITCODE -ne 0) { throw 'Session Library deletion check failed; DSH was not started.' }
-        }
         $logDir = Get-ProjectPath ('logs/' + $name.ToLowerInvariant())
         New-Item -ItemType Directory -Path $logDir -Force | Out-Null
         New-Item -ItemType Directory -Path (Split-Path $statePath -Parent) -Force | Out-Null

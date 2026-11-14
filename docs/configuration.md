@@ -66,11 +66,9 @@ must be established by the installer and runtime catalog; source examples do not
 count as consent or successful installation.
 
 In private `config/environment.json`, set `dshPluginsDirectory` to the absolute
-DSH Plugins checkout root. Managed DSH startup uses that package's
-`scripts/maintenance/Apply-SessionDeletions.mjs` before starting DSH. This keeps
-the session persistence adapter in the generic package instead of maintaining a
-second copy in Media Studio. The example's `privateEnvironmentFields` illustrates
-this field; the surrounding example is not a complete environment configuration.
+DSH Plugins checkout root. Enable the appropriate Session Library startup plugin
+in each DSH profile. See [DSH Plugins configuration](https://github.com/n3dypop/dsh-plugins/blob/main/docs/configuration.md).
+Each Host applies its own reservations when it starts.
 
 Secrets are created/read under the private runtime. Do not commit copied auth
 tokens, connection launch URLs, `.env` files, model license receipts, service
