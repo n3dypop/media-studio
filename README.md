@@ -142,10 +142,19 @@ existing run to recover its image without submitting a second generation.
 
 **Resources** opens **Media & Resources**, showing production stages, elapsed
 time and Strata/ComfyUI resource observations. **Catalog** lists workflow
-dependencies, DSH availability, resource estimates and execution warnings. Use
+dependencies, DSH availability, resource estimates and execution warnings.
+Not-recommended workflows are sorted to the end, across pages. Use
 **Add to prompt** to draft a request for the selected workflow. For a managed
 workflow with a warning, confirm the same settings before it runs. Settings contain launch paths and
-managed Start, Stop, Restart and model-resource release operations. User
+managed Start, Stop, Restart and model-resource release operations. The
+**Strata** and **ComfyUI** settings pages show installed versions and let you
+check official releases and apply an eligible update. Stop the target and the
+Controller before applying. Strata uses its signed feed for engine updates and
+shows the pinned Control version separately. ComfyUI updates the official Git
+checkout by fast-forward after checking the existing Python dependencies.
+Changes that need a new Python environment or a new Strata Control bundle
+follow the product's maintenance procedure. After applying an update, use
+**Services** to start the services you need. User
 acceptance/rejection and stopping apply to the selected production. Search terms
 and page retrieval require their own explicit approvals.
 

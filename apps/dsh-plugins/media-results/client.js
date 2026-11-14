@@ -157,7 +157,7 @@ window.__ModuleLoader__.load({
         h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit, minmax(min(100%, 260px), 1fr))',gap:'16px',alignItems:'start'}},...images.map(image=>
           h('figure',{key:image.displayKey??image.attachment.attachmentId,style:{margin:0,minWidth:0,padding:'10px',border:'1px solid var(--dsw-alias-border-l2)',borderRadius:'var(--dsw-radius-md, 12px)',background:'var(--dsw-alias-bg-layer-2)'}},
             images.length>1||image.evaluationFrame?h('figcaption',{style:{...secondary,marginBottom:'8px',fontWeight:600}},image.label):null,
-            h(ImageContent,{imageFactories:props.imageFactories,renderFactorySlot:props.renderFactorySlot,images:[image],loadImage:props.loadImage,align:'start',compact:false,thumbnail:false}),
+            h(ImageContent,{imageFactories:props.imageFactories,renderFactorySlot:props.renderFactorySlot,images:[image],loadImage:props.loadImage,align:'start',compact:false,thumbnail:false,comparisonSession:props.comparisonSession}),
             image.original&&typeof props.loadOriginal==='function'?h('figcaption',{style:{marginTop:'10px'}},h('a',{href:props.loadOriginal(image.original),download:image.original.name,style:linkStyle},'元のPNGを保存')):null,
             h('div',{style:{...secondary,marginTop:'6px'}},`${image.attachment.width} × ${image.attachment.height} px · プレビュー ${sizeText(image.attachment.bytes)}`)))));
     }
@@ -214,7 +214,7 @@ window.__ModuleLoader__.load({
       const imageFactories=createImageFactories(ctx);
       for(const toolName of Object.keys(titles))ctx.slots.inject('tool.call.toolview',()=>ctx.slots.register({name:'tool.call.toolview',key:toolName,inject:sessionId=>({sessionId,imageFactories,loadVideo:attachment=>videoUrl(sessionId,attachment)})},LocalProductionView));
       ctx.effect(()=>ctx.uiConversation.events.register(generatedImagesDefinition));
-      ctx.slots.inject('conversation.chat.turnTail',()=>ctx.slots.register({name:'conversation.chat.turnTail',id:imageDataKey,order:10,inject:sessionId=>({imageFactories,loadImage:Object.assign(attachment=>ctx.uiConversation.imageUrl(sessionId,attachment),{peek:attachment=>ctx.uiConversation.peekImageUrl(sessionId,attachment)}),loadVideo:attachment=>videoUrl(sessionId,attachment),loadOriginal:original=>originalUrl(sessionId,original)})},GeneratedImagesTail));
+      ctx.slots.inject('conversation.chat.turnTail',()=>ctx.slots.register({name:'conversation.chat.turnTail',id:imageDataKey,order:10,inject:sessionId=>({imageFactories,comparisonSession:sessionId,loadImage:Object.assign(attachment=>ctx.uiConversation.imageUrl(sessionId,attachment),{peek:attachment=>ctx.uiConversation.peekImageUrl(sessionId,attachment)}),loadVideo:attachment=>videoUrl(sessionId,attachment),loadOriginal:original=>originalUrl(sessionId,original)})},GeneratedImagesTail));
     }
     return{inject:['slots','uiConversation'],apply,createImageFactories,ImageContent,LocalProductionView,resultView,GeneratedImagesTail,generatedImagesDefinition,generatedImagesForTurn,generatedVideosForTurn,VideoResult,videoUrl,originalUrl};
   },

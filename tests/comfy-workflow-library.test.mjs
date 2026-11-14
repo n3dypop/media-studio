@@ -298,6 +298,14 @@ test('resource figures use actual disk sizes and the matching workflow measureme
   await writeFile(observationsFile, JSON.stringify({ version:1, assessments:{'sd-depth':assessment} }));
   const shortage = (await readRow({observeResources:observed})).recommendation;
   assert.deepEqual(shortage, {status:'not-recommended',issue:'resource-capacity',evidence:'verified',shortfalls:[{key:'commitBytes',minimumBytes:31000,capacityBytes:30000}]});
+  const safe = { ...entry, id:'safe-depth', family:'ZZZ', label:'Safe depth' };
+  const catalogFile = path.join(indexDirectory, 'workflow-catalog.json');
+  await writeFile(catalogFile, JSON.stringify({version:1, workflows:[entry,safe]}));
+  for(const [page,id] of [[1,safe.id],[2,entry.id]]){
+    const result=await comfyWorkflowLibrary({...options,observeResources:observed,page,limit:1});
+    assert.equal(result.total,2);
+    assert.equal(result.workflows[0].id,id);
+  }
   Object.assign(assessment, {issue:'abnormal-termination',evidence:'observed',date:'2026-11-15',summary:'OS bugcheck'});
   await writeFile(observationsFile, JSON.stringify({ version:1, assessments:{'sd-depth':assessment} }));
   entry.profile = 'fixture';

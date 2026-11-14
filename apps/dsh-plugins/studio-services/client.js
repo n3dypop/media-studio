@@ -2,7 +2,7 @@
 window.__ModuleLoader__.load({
   id:'studio-services',
   factory(require){
-    const {createElement:h,useEffect,useSyncExternalStore}=require('react');
+    const {createElement:h,useEffect,useState,useSyncExternalStore}=require('react');
     const {Button}=require('@deepseek-ai/dsh-client-ui-primitives');
     const PATH='/api/local-studio/services',PENDING_KEY='studio-services.pending.v1';
     const SERVICES=['Strata','ComfyUI','Controller'],ACTIONS=['start','stop','restart','unload'];
@@ -84,7 +84,7 @@ window.__ModuleLoader__.load({
       const source=value?.services;
       return SERVICES.map(id=>{const row=Array.isArray(source)?source.find(item=>(item.id??item.service??item.name)===id):source?.[id]??source?.[id.toLowerCase()];return {id,...(row&&typeof row==='object'?row:{}),state:row?.state??row?.status??'unknown'};});
     }
-    const validIntent=value=>value&&SERVICES.includes(value.service)&&ACTIONS.includes(value.action)&&typeof value.requestId==='string'&&/^[a-f0-9-]{36}$/i.test(value.requestId);
+    const validIntent=value=>value&&SERVICES.includes(value.service)&&(ACTIONS.includes(value.action)||value.action==='update'&&value.service!=='Controller'&&/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(value.offer))&&typeof value.requestId==='string'&&/^[a-f0-9-]{36}$/i.test(value.requestId);
     async function desktopProof(target,signal){
       if(window.location?.protocol!=='dsh-app:'||window.location.host!=='app')return null;
       const response=await fetch('/api/local-studio/desktop-proof/'+target,{credentials:'same-origin',cache:'no-store',headers:{'X-Local-Studio-Proof-Request':'1'},signal});
@@ -139,10 +139,10 @@ window.__ModuleLoader__.load({
           return false;
         }finally{postLock=false;publish({posting:false});if(active)void refresh();}
       }
-      async function act(service,action){
+      async function act(service,action,offer){
         if(disposed||postLock||state.uncertain||operationBusy(state.value?.operation)||pending)return false;
-        if(!SERVICES.includes(service)||!ACTIONS.includes(action)||action==='unload'&&service==='Controller')throw Error('未対応のサービス操作です。');
-        const intent={service,action,requestId:uuid()};if(!validIntent(intent))throw Error('操作IDを作成できません。');
+        if(!SERVICES.includes(service)||action==='unload'&&service==='Controller')throw Error('未対応のサービス操作です。');
+        const intent={service,action,requestId:uuid(),...(action==='update'&&{offer})};if(!validIntent(intent))throw Error('操作IDを作成できません。');
         return submitIntent(intent);
       }
       async function retryPending(){
@@ -160,7 +160,7 @@ window.__ModuleLoader__.load({
       if(['completed','succeeded','cancelled'].includes(state))return null;
       const needsAttention=['failed','unknown','error','unavailable'].includes(state);
       const current=steps.find(step=>step&&typeof step==='object'&&['running','active','starting','stopping','restarting'].includes(step.state??step.status));
-      return h('section',{className:'ss-operation','aria-label':'サービス操作の進行',role:needsAttention?'alert':'status'},h('div',{className:'ss-row'},h('strong',null,`${operation.service??''} ${{start:'起動',stop:'停止',restart:'再起動',unload:'リソース解放'}[operation.action]??'操作'}`),h('span',{className:'ss-state','data-state':state},['running','active'].includes(state)?'処理中':stateNames[state]??'状態を確認中')),
+      return h('section',{className:'ss-operation','aria-label':'サービス操作の進行',role:needsAttention?'alert':'status'},h('div',{className:'ss-row'},h('strong',null,`${operation.service??''} ${{start:'起動',stop:'停止',restart:'再起動',unload:'リソース解放',update:'更新'}[operation.action]??'操作'}`),h('span',{className:'ss-state','data-state':state},['running','active'].includes(state)?'処理中':stateNames[state]??'状態を確認中')),
         needsAttention&&operation.detail?h('p',{className:'ss-muted ss-detail'},String(operation.detail)):null,
         !needsAttention&&current?h('p',{className:'ss-muted ss-detail'},String(current.label??current.name??current.service??'サービスを準備中')):null,
         operation.error?h('p',{className:'ss-notice'},String(operation.error?.message??operation.error)):null,
@@ -240,6 +240,7 @@ window.__ModuleLoader__.load({
     ];
     const engineRequest=(engine,body,{signal}={})=>requestSettings(ENGINE_SETTINGS_PATH+'?'+new URLSearchParams({engine}),'engine-settings',body,signal);
     function EnginePage({engine,editor,controller,t=defaultText}){
+      const [offer,setOffer]=useState(null),[updateError,setUpdateError]=useState(''),[checking,setChecking]=useState(false);
       const state=useSyncExternalStore(editor.subscribe,editor.snapshot,editor.snapshot);
       const lifecycle=useSyncExternalStore(controller.subscribe,controller.snapshot,controller.snapshot);
       useEffect(()=>{
@@ -255,6 +256,16 @@ window.__ModuleLoader__.load({
       const service=serviceRows(lifecycle.value).find(item=>item.id===engine);
       const lifecycleBusy=lifecycle.posting||lifecycle.uncertain||Boolean(lifecycle.pending)||operationBusy(operation);
       const locale=t('tuning.locale');
+      const phrase=(ja,en)=>locale==='ja'?ja:en;
+      async function checkUpdate(){
+        setChecking(true);setUpdateError('');setOffer(null);
+        try{
+          const signal=AbortSignal.timeout(38000),proof=await desktopProof('engine-settings',signal);
+          const query=new URLSearchParams({engine,checkUpdate:'1'});
+          const response=await fetch(ENGINE_SETTINGS_PATH+'?'+query,{method:'POST',credentials:'same-origin',cache:'no-store',signal,headers:{'Content-Type':'application/json','X-Local-Studio-Service-Settings':'1',...(proof&&{'X-Local-Studio-Desktop-Proof':proof})},body:'{}'});
+          const value=await response.json();if(!response.ok)throw Error(value.error);setOffer(value);
+        }catch(error){setUpdateError(error.message||phrase('更新を確認できません。','Could not check for updates.'));}finally{setChecking(false);}
+      }
       const running=current?.runningMatches===null?'tuning.unverified':current?.runningMatches?'tuning.applied':'tuning.pending';
       const editable=field=>!busy&&!!current&&Object.hasOwn(draft,field.id)&&
         (!field.id.startsWith('vision')||current.editable?.vision)&&
@@ -273,6 +284,11 @@ window.__ModuleLoader__.load({
       };
       return h('section',{className:'studio-services ss-settings','data-engine-settings':engine},h('style',null,css),
         h('header',{className:'ss-heading'},h('h3',null,engine),h(Button,{type:'button',size:'sm',variant:'outline',disabled:busy,onClick:()=>void editor.reload()},t('refresh'))),
+        h('p',{className:'ss-muted'},current?.version?`${phrase('現在のバージョン','Installed version')} ${current.version.installed}${current.version.control?` · Control ${current.version.control}`:''}`:phrase('バージョン取得不可','Version unavailable')),
+        h('div',{className:'ss-buttons'},h(Button,{type:'button',size:'sm',variant:'outline',disabled:checking||lifecycleBusy,onClick:()=>void checkUpdate()},checking?phrase('確認中…','Checking…'):phrase('アップデートを確認','Check for updates')),
+          offer?.canUpdate?h(Button,{type:'button',size:'sm',variant:'outline',disabled:changed||lifecycleBusy||service.state!=='stopped'||serviceRows(lifecycle.value).find(item=>item.id==='Controller')?.state!=='stopped',onClick:async()=>{if(await controller.act(engine,'update',offer.identity))setOffer(null);}},`${phrase('アップデート','Update')} ${offer.available}`):null),
+        offer?h('p',{className:'ss-muted ss-detail',role:'status'},offer.canUpdate?phrase('更新には対象サービスとControllerの停止が必要です。','Stop this service and Controller before updating.'):offer.available?`${phrase('配布版','Available release')} ${offer.available} · ${phrase('適用できる更新はありません','No applicable update')}`:phrase('互換アップデートがありません。','No compatible update.')):null,
+        updateError?h('p',{className:'ss-notice',role:'alert'},updateError):null,
         h('p',{className:'ss-muted',role:'status'},t(!current?'paths.loading':current.state==='stopped'?'tuning.stopped':running)),
         h('p',{className:'ss-muted ss-detail'},t(engine==='Strata'?'tuning.contextHelp':'tuning.comfyHelp')),
         ...engineFields[engine].map(renderField),

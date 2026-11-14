@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {readEngineSettings,saveEngineSettings,validateEngineSettings} from '../apps/dsh-plugins/studio-services/engine-settings.mjs';
 import {engineSettingsHandler} from '../apps/dsh-plugins/studio-services/index.mjs';
+import {applyEngineUpdate,checkEngineUpdate} from '../apps/dsh-plugins/studio-services/engine-updates.mjs';
 
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 async function fixture(t){
@@ -76,4 +77,39 @@ test('settings route permits authenticated same-origin writes and projects pendi
   assert.equal(result.status,200);
   assert.equal((await result.json()).runningMatches,false);
   assert.equal(JSON.parse(await readFile(record)).configSha256,current.launchRevision);
+});
+
+test('ComfyUI applies only the reviewed official commit with compatible local dependencies',async t=>{
+  const {root,env}=await fixture(t),directory=join(root,'comfy'),python=join(directory,'python.exe');
+  await mkdir(directory);
+  await writeFile(join(directory,'comfyui_version.py'),'__version__ = "1.2.3"\n');
+  await writeFile(python,'synthetic executable');
+  await writeFile(env,JSON.stringify({comfyDirectory:directory,comfyPythonExecutable:python}));
+  const before='1'.repeat(40),target='2'.repeat(40),tag='v1.2.4',official='https://github.com/Comfy-Org/ComfyUI.git';
+  const fetcher=async url=>{assert.equal(url,'https://api.github.com/repos/Comfy-Org/ComfyUI/releases/latest');return Response.json({tag_name:tag});};
+  let head=before,mismatch=['torch'];
+  const run=async (file,args)=>{
+    if(file===python)return {stdout:args.includes('pip')?'':JSON.stringify(mismatch)};
+    assert.equal(file,'git.exe');
+    const [verb,...operands]=args.slice(6);
+    switch(verb){
+      case 'remote': return {stdout:official};
+      case 'ls-remote': return {stdout:target+'\trefs/tags/'+tag};
+      case 'status': case 'merge-base': return {stdout:''};
+      case 'rev-parse': return {stdout:operands[0]==='HEAD'?head:target};
+      case 'fetch': assert.deepEqual(operands,['--no-tags',official,'refs/tags/'+tag]);return {stdout:''};
+      case 'show': return {stdout:operands[0].endsWith(':requirements.txt')?'torch>=2':'__version__="1.2.4"'};
+      case 'merge': assert.deepEqual(operands,['--ff-only','--no-edit',target]);head=target;return {stdout:''};
+      default: assert.fail('Unexpected Git command '+verb);
+    }
+  };
+  const options={run,fetcher};
+  const offer=await checkEngineUpdate(root,'ComfyUI',options);
+  assert.deepEqual(offer,{installed:'1.2.3',available:tag,canUpdate:true,identity:target});
+  await assert.rejects(applyEngineUpdate(root,'ComfyUI',before,options),{status:409});
+  await assert.rejects(applyEngineUpdate(root,'ComfyUI',target,options),/Python依存関係/);
+  assert.equal(head,before);
+  mismatch=[];
+  await applyEngineUpdate(root,'ComfyUI',target,options);
+  assert.equal(head,target);
 });

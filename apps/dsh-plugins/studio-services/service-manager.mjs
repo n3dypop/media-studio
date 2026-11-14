@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {join,resolve,sep,win32} from 'node:path';
 import net from 'node:net';
 import {execFile} from 'node:child_process';
+import {applyEngineUpdate} from './engine-updates.mjs';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {createEpochVerifier,probeWindowsEpoch,validateEpochEvidence} from '../../controller/epoch.mjs';
@@ -12,7 +13,7 @@ import {controllerNodeExecutable} from '../../controller/service-paths.mjs';
 import {loadSearchConfiguration} from '../../controller/search/config.mjs';
 
 export const SERVICES=Object.freeze(['Strata','ComfyUI','Controller']);
-const actions=new Set(['start','stop','restart','unload']);
+const actions=new Set(['start','stop','restart','unload','update']);
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const fault=(message,status=409)=>Object.assign(new Error(message),{status});
 const copy=value=>structuredClone(value);
@@ -35,11 +36,16 @@ $last=Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction Stop
   return value.pidAbsent&&value.listenerCount===0;
 }
 
-export function servicePlan(service,action,snapshot){
+export function servicePlan(service,action,snapshot,offer){
   if(!SERVICES.includes(service)||!actions.has(action))throw fault('サービスまたは操作が不正です。',400);
   const byId=new Map(snapshot.services.map(s=>[s.id,s]));
   const target=byId.get(service),controller=byId.get('Controller');
   if(!target||!controller||snapshot.services.some(s=>!['running','stopped'].includes(s.state)))throw fault('管理プロセスを照合できないサービスがあります。状態を確認してください。');
+  if(action==='update'){
+    if(service==='Controller'||!(service==='ComfyUI'?/^[a-f0-9]{40}$/:/^[a-f0-9]{64}$/).test(offer??''))throw fault('更新候補を確認してください。',400);
+    if(target.state!=='stopped'||controller.state!=='stopped')throw fault('更新対象とControllerを停止してから更新してください。');
+    return [{service,action,offer,label:`${service}: 更新`,state:'pending'}];
+  }
   if(action==='unload'){
     if(!['Strata','ComfyUI'].includes(service))throw fault('このサービスには解放対象の生成モデルがありません。',400);
     if(target.state!=='running'||controller.state!=='running')throw fault('リソース解放には対象サービスとControllerの起動が必要です。');
@@ -160,6 +166,11 @@ export async function createSystemAdapter({root,probeStopped=probeStoppedService
   };
   return {get paths(){return paths;},reload(){configurationDirty=true;},async snapshot(){if(configurationDirty)await loadConfiguration();const searchEnabled=loadSearchConfiguration(root).enabled;return {observedAt:new Date().toISOString(),services:await Promise.all(SERVICES.map(serviceStatus)),strataEnabled:strata.enabled,searchEnabled,paths};},assertIdle,
     async runStep(step){
+      if(step.action==='update'){
+        try{await applyEngineUpdate(root,step.service,step.offer);}
+        catch(error){if(error.status)throw error;throw Object.assign(Error('更新結果を確認できません。現在のバージョンと製品の更新記録を確認してください。'),{uncertain:true});}
+        return;
+      }
       if(step.action==='unload'){
         const token=(await readFile(join(root,'data/controller/auth-token'),'utf8')).trim();
         let response;
@@ -221,16 +232,16 @@ export async function createServiceManager({root,adapter,clock=()=>new Date(),id
   }
   async function submit(input,{cookie}={}){
     if(disposed)throw fault('サービス管理は終了しています。',503);
-    if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['service','action','requestId'].includes(k))||!SERVICES.includes(input.service)||!actions.has(input.action)||!uuid.test(input.requestId??''))throw fault('サービス操作の指定が不正です。',400);
+    if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['service','action','requestId',...(input.action==='update'?['offer']:[])].includes(k))||!SERVICES.includes(input.service)||!actions.has(input.action)||!uuid.test(input.requestId??''))throw fault('サービス操作の指定が不正です。',400);
     await refreshReceipts();
     const existing=operations.find(o=>o.requestId===input.requestId);
-    if(existing){if(existing.service!==input.service||existing.action!==input.action)throw fault('同じrequestIdの操作を変更できません。');return {operation:copy(existing),created:false};}
+    if(existing){if(existing.service!==input.service||existing.action!==input.action||existing.offer!==input.offer)throw fault('同じrequestIdの操作を変更できません。');return {operation:copy(existing),created:false};}
     if(running)throw fault('別のサービス操作を処理中です。');
     // Reserve before any asynchronous preflight, including concurrent requests.
     const reservation={};running=reservation;generation++;let lock,prepared;
     try{
       try{lock=await open(lockPath,'wx');}catch{throw fault('別の操作または結果不明のサービス操作があります。自動再実行しません。');}
-      const before=await currentSnapshot(true),steps=servicePlan(input.service,input.action,before);
+      const before=await currentSnapshot(true),steps=servicePlan(input.service,input.action,before,input.offer);
       if(steps.length&&operations.some(o=>o.state==='unknown'))throw fault('前回の操作結果が不明です。新しい変更は開始せず、既存の管理記録を確認してください。');
       if(steps.length)await adapter.assertIdle(before,cookie);
       const operation={id:id(),...input,state:steps.length?'running':'completed',steps,createdAt:clock().toISOString(),updatedAt:clock().toISOString(),detail:steps.length?'サービスの管理手順を実行します。':'既に指定された状態です。'};
@@ -247,7 +258,10 @@ export async function createServiceManager({root,adapter,clock=()=>new Date(),id
             step.state='running';operation.updatedAt=clock().toISOString();await persist();
             // Recheck before every destructive step. Stop scripts repeat
             // ownership, queue and controller-journal checks themselves.
-            try{if(['stop','unload'].includes(step.action))await adapter.assertIdle(await currentSnapshot(true),cookie);await adapter.runStep(step);step.state='completed';}catch(e){step.state=e.uncertain?'unknown':'failed';throw e;}
+            try{if(['stop','unload','update'].includes(step.action)){
+              const latest=await currentSnapshot(true);await adapter.assertIdle(latest,cookie);
+              if(step.action==='update')servicePlan(step.service,'update',latest,step.offer);
+            }await adapter.runStep(step);step.state='completed';}catch(e){step.state=e.uncertain?'unknown':'failed';throw e;}
             invalidateCache();operation.updatedAt=clock().toISOString();await persist();
           }
           operation.state='completed';operation.detail='サービス操作が完了しました。';

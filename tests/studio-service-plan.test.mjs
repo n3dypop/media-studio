@@ -21,3 +21,15 @@ test('Controller start reuses verified dependencies and restart still starts the
   snapshot.services[0].state = 'unknown';
   assert.throws(() => steps('Controller', 'restart'), /照合/);
 });
+
+test('A product update is bound to a checked release and targets only a stopped product',()=>{
+  const snapshot={services:[{id:'Strata',state:'running'},{id:'ComfyUI',state:'stopped'},{id:'Controller',state:'stopped'}]};
+  const commit='4'.repeat(40),digest='5'.repeat(64);
+  assert.throws(()=>servicePlan('ComfyUI','update',snapshot,digest),{status:400});
+  assert.throws(()=>servicePlan('Strata','update',snapshot,digest),{status:409});
+  assert.deepEqual(servicePlan('ComfyUI','update',snapshot,commit),[
+    {service:'ComfyUI',action:'update',offer:commit,label:'ComfyUI: 更新',state:'pending'},
+  ]);
+  snapshot.services[2].state='running';
+  assert.throws(()=>servicePlan('ComfyUI','update',snapshot,commit),{status:409});
+});

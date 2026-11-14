@@ -192,23 +192,27 @@ export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, inst
     const text = searchable([entry.id, entry.family, entry.label, entry.file, entry.mode, entry.profile, ...entry.models.map(model => model.name)].join(' '));
     return (!profile || entry.profile === profile) && (!referencedIds || referencedIds.has(entry.id)) && (!locator || entry.id === locator || entry.file === locator) && (!mode || mode === entry.mode) && (!media || media === entry.media) && terms.every(term => text.includes(term));
   }).sort((a, b) => a.family.localeCompare(b.family) || a.id.localeCompare(b.id));
-  const selected = entries.slice((page - 1) * limit, page * limit);
-  if (!selected.length) return { ...empty, state: 'configured', operations, total: entries.length };
+  if ((page - 1) * limit >= entries.length) return { ...empty, state: 'configured', operations, total: entries.length };
   const observations = await readLocalJson(root, 'media-studio/workflow-resource-observations.json', 128 * 1024).catch(() => null);
-  if (advisoriesOnly) {
-    // Read all matching advisories without depending on a live ComfyUI lease or loading schemas.
-    const applicable = entries.filter(entry => Object.hasOwn(observations?.assessments ?? {}, entry.id));
-    if (!applicable.length) return { ...empty, state: 'configured' };
-    const resources = workflowResourceReader(null, observations, await observeResources?.());
-    const rows = await Promise.all(applicable.map(async entry => {
+  const applicable = entries.filter(entry => Object.hasOwn(observations?.assessments ?? {}, entry.id));
+  const [objects, machine] = await Promise.all([advisoriesOnly ? null : installed(),
+    advisoriesOnly && !applicable.length ? null : observeResources?.()]);
+  const advisories = new Map();
+  if (applicable.length) {
+    const resources = workflowResourceReader(null, observations, machine);
+    await Promise.all(applicable.map(async entry => {
       const bytes = await readLocalFile(root, `default/workflows/${entry.file}`, 1024 * 1024).catch(() => null);
       const { recommendation } = await resources(entry, bytes && createHash('sha256').update(bytes).digest('hex'));
-      return recommendation && { id: entry.id, label: entry.label, recommendation };
+      if (recommendation) advisories.set(entry.id, recommendation);
     }));
-    const workflows = rows.filter(Boolean);
+  }
+  if (advisoriesOnly) {
+    const workflows = applicable.filter(entry => advisories.has(entry.id))
+      .map(({id,label}) => ({id,label,recommendation:advisories.get(id)}));
     return { ...empty, state: 'configured', total: workflows.length, workflows };
   }
-  const [objects, machine] = await Promise.all([installed(), observeResources?.()]);
+  entries.sort((a,b) => Number(advisories.has(a.id)) - Number(advisories.has(b.id)));
+  const selected = entries.slice((page - 1) * limit, page * limit);
   const managed = selected.some(entry => entry.profile) ? await catalog(objects) : [];
   const resources = workflowResourceReader(modelDirectory, observations, machine);
   const workflows = await Promise.all(selected.map(async entry => {

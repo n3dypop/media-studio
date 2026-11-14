@@ -1,4 +1,5 @@
 import {lstat,open,readFile,unlink} from 'node:fs/promises';
+import {checkEngineUpdate,installedEngineVersion} from './engine-updates.mjs';
 import {spawn} from 'node:child_process';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -72,7 +73,7 @@ async function writeEngineSettings(root,engine,input){
   });
 }
 
-export function engineSettingsHandler({root,adapter,manager,dshOrigin,writer=writeEngineSettings,mutationAllowed=allowWebMutation(dshOrigin,settingsMarker)}){
+export function engineSettingsHandler({root,adapter,manager,dshOrigin,writer=writeEngineSettings,checkUpdate=checkEngineUpdate,mutationAllowed=allowWebMutation(dshOrigin,settingsMarker)}){
   const busy=message=>Object.assign(Error(message),{status:409});
   const lockPath=join(root,'runtime/Studio-services.lock');
   async function snapshot(engine){
@@ -83,12 +84,17 @@ export function engineSettingsHandler({root,adapter,manager,dshOrigin,writer=wri
       if(engine==='Strata'&&record.configSha256)runningMatches=record.configSha256===current.launchRevision;
       if(engine==='ComfyUI'&&record.comfyTuning)runningMatches=Object.keys(current.values).every(key=>record.comfyTuning[key]===current.values[key]);
     }
-    return {values:current.values,editable:current.editable,revision:current.revision,state,runningMatches};
+    return {values:current.values,editable:current.editable,revision:current.revision,state,runningMatches,version:await installedEngineVersion(root,engine)};
   }
   return async request=>{
     try{
       const url=new URL(request.url),engine=url.searchParams.get('engine');
-      if([...url.searchParams].length!==1||!engines.includes(engine))return response(400,{error:'設定対象が不正です。'});
+      const checking=url.searchParams.get('checkUpdate')==='1';
+      if([...url.searchParams].length!==(checking?2:1)||!engines.includes(engine))return response(400,{error:'設定対象が不正です。'});
+      if(checking){
+        if(request.method!=='POST'||!mutationAllowed(request))return response(403,{error:'DSH設定画面からの本人操作を確認できません。'});
+        return response(200,await checkUpdate(root,engine));
+      }
       if(request.method==='GET')return response(200,await snapshot(engine));
       if(request.method!=='POST')return response(405,{error:'未対応の操作です。'});
       if(!mutationAllowed(request))return response(403,{error:'DSH設定画面からの本人操作を確認できません。'});
