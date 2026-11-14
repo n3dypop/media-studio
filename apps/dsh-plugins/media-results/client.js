@@ -29,7 +29,7 @@ window.__ModuleLoader__.load({
       local_production_create:'制作条件を保存',local_workflow_catalog:'利用できるモデルとノードを確認',
       local_workflow_draft:'ワークフローを設計・検証',local_production_render:'画像・動画を生成',local_prepared_render:'画像を生成',
       local_image_prepare:'生成条件を準備',
-      local_moss_official_prepare:'MOSSの生成条件を準備',local_qwen21_prepare:'Qwenの生成条件を準備',
+      local_moss_official_prepare:'MOSSの生成条件を準備',local_qwen21_prepare:'Qwenの生成条件を準備',local_catalog_prepare:'ワークフローの生成条件を準備',
       local_moss_pe_start:'MOSSのプロンプト改善を開始',local_moss_pe_result:'MOSSのプロンプト改善結果を確認',local_moss_pe_decide:'MOSSの改善結果を判断',local_moss_pe_reconcile:'MOSSの改善処理を照合',
       local_qwen_pe_start:'Qwenのプロンプト改善を開始',local_qwen_pe_result:'Qwenのプロンプト改善結果を確認',local_qwen_pe_decide:'Qwenの改善結果を判断',local_qwen_pe_reconcile:'Qwenの改善処理を照合',
       local_render_result:'保存した成果物を表示',local_production_evaluate:'成果物を評価',local_production_cancel:'制作を停止',

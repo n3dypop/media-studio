@@ -2,6 +2,7 @@
 // These functions are read-only and are not by themselves permission to clear
 // a pending journal entry: delivery must also be bound and durably confirmed.
 import {createHash} from 'node:crypto';
+import {preparedWorkflowVersions,preparedParameters} from '../../controller/media-modes.mjs';
 
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const digest=value=>sha(JSON.stringify(value));
@@ -71,8 +72,8 @@ export function verifyPreparedRenderReceipt(intent,sessionId,value){
   // already terminated need not itself have a cancel flag. This observes
   // identity only and never claims process exit, cleanup or GPU release.
   const cancellationObserved=p.cancelRequested===true&&typeof r?.cancelRequested==='boolean'&&revisionAfterOnlyCancellation(p,r.productionRevision,value.cancellationReceipt);
-  if(!id.test(intent.targetId??'')||p.id!==intent.targetId||!id.test(r?.id??'')||r.sessionId!==sessionId||r.productionId!==p.id||r.requestId!==intent.requestId||!Number.isSafeInteger(r.productionRevision)||r.productionRevision<1||!(unchanged||cancellationObserved)||p.latestRunId!==r.id||!Array.isArray(p.attempts)||p.attempts.at(-1)!==r.id||p.attempts.filter(id=>id===r.id).length!==1||s.assetSessionId!==sessionId||s.briefHash!==p.briefHash||s.enhancer!==false||s.modelProfile!==p.brief.modelProfile||![4,5].includes(w.schemaVersion)||p.workflowId!==w.id||p.workflowSha256!==w.sha256||!hash.test(r.specHash??'')||digest(s)!==r.specHash)fail();
-  if(!req||!out||s.prompt!==req.prompt||s.negativePrompt!==(req.negativePrompt??'')||s.seed!==(req.seed??'42')||s.width!==out.width||s.height!==out.height||s.steps!==(req.steps??(w.schemaVersion===5&&req.variant==='turbo'?8:w.mode==='edit'&&w.schemaVersion!==5?30:25))||s.mode!==(p.brief.mode??'t2i')||s.inputAssetId!==(p.brief.inputAssetId??null)||JSON.stringify(s.invariants)!==JSON.stringify(p.brief.invariants)||JSON.stringify(w.inputAssetIds)!==JSON.stringify(p.brief.inputAssetIds??(p.brief.inputAssetId?[p.brief.inputAssetId]:[]))||!Array.isArray(s.referenceAssets)||JSON.stringify(s.referenceAssets.map(x=>x.id))!==JSON.stringify(p.brief.referenceAssetIds??[]))fail();
+  if(!id.test(intent.targetId??'')||p.id!==intent.targetId||!id.test(r?.id??'')||r.sessionId!==sessionId||r.productionId!==p.id||r.requestId!==intent.requestId||!Number.isSafeInteger(r.productionRevision)||r.productionRevision<1||!(unchanged||cancellationObserved)||p.latestRunId!==r.id||!Array.isArray(p.attempts)||p.attempts.at(-1)!==r.id||p.attempts.filter(id=>id===r.id).length!==1||s.assetSessionId!==sessionId||s.briefHash!==p.briefHash||s.enhancer!==false||s.modelProfile!==p.brief.modelProfile||!preparedWorkflowVersions.includes(w.schemaVersion)||p.workflowId!==w.id||p.workflowSha256!==w.sha256||!hash.test(r.specHash??'')||digest(s)!==r.specHash)fail();
+  if(!req||!out||Object.entries(preparedParameters(w)).some(([key,value])=>s[key]!==value)||s.mode!==(p.brief.mode??'t2i')||s.inputAssetId!==(p.brief.inputAssetId??null)||JSON.stringify(s.invariants)!==JSON.stringify(p.brief.invariants)||JSON.stringify(w.inputAssetIds)!==JSON.stringify(p.brief.inputAssetIds??(p.brief.inputAssetId?[p.brief.inputAssetId]:[]))||!Array.isArray(s.referenceAssets)||JSON.stringify(s.referenceAssets.map(x=>x.id))!==JSON.stringify(p.brief.referenceAssetIds??[]))fail();
   if(digest({workflowId:w.id,expectedRevision:r.productionRevision-1,requestId:intent.requestId})!==intent.inputHash)fail();
   return resultProof(value);
 }

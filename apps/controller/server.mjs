@@ -29,6 +29,7 @@ import {createComfyProgressMonitor} from './monitor-progress.mjs';
 import {createConfiguredNativeProbe} from './native-probe.mjs';
 import {assertNoControllerPreopenGuard} from './search/cutover-preopen-guard.mjs';
 import {strataCatalog} from './strata-catalog.mjs';
+import {catalogProfile} from './catalog-profiles.mjs';
 
 if(process.env.MEDIA_STUDIO_HOME&&!isAbsolute(process.env.MEDIA_STUDIO_HOME))throw Error('MEDIA_STUDIO_HOME must be absolute');
 const packageRoot=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
@@ -70,13 +71,24 @@ try {
   const wireStore=new DurableWireStore(store),wireReader=new DurableWireJournalReader(root);
   const profilePaths=Object.fromEntries(activeModelProfiles.map(id=>[id,join(packageRoot,'workflows/approved',id+'.json')]));
   const assets=new AssetStore({store,root,inputRoot:settings.inputDirectory,pythonExecutable:settings.comfyPythonExecutable});
-  const adapter=new ComfyAdapter({baseUrl:comfyUrl,outputRoot:join(root,'outputs'),profilePath:profilePaths[config.profile],modelProfile:config.profile,profilePaths,assets});
+  const adapter=new ComfyAdapter({baseUrl:comfyUrl,outputRoot:join(root,'outputs'),profilePath:profilePaths[config.profile],modelProfile:config.profile,profilePaths,assets,mediaPython:settings.comfyPythonExecutable});
   const verifyEpoch=createEpochVerifier({runtimePath:join(root,'runtime/ComfyUI.json'),expectedExecutable:settings.comfyPythonExecutable,baseUrl:comfyUrl,...epochProbe});
   const verifyRetiredEpoch=createRetiredEpochVerifier({expectedExecutable:settings.comfyPythonExecutable,baseUrl:comfyUrl});
   const productions=new ProductionStore(store,{defaultModelProfile:config.profile,assets}),workflows=new WorkflowRegistry({
     root,directory:workflowDirectory,adapter,assets,comfyUserDirectory:workflowDirectory ? join(settings.comfyDirectory,'user') : null,
     comfyModelDirectory:workflowDirectory ? join(settings.comfyDirectory,'models') : null,
   });
+  workflows.qualifiedCatalogProfiles=()=>{
+    let record;
+    try{record=JSON.parse(readFileSync(join(root,'config/catalog-qualification.json'),'utf8'));}
+    catch(error){if(error.code==='ENOENT')return new Set();throw error;}
+    if(record.version!==1||!Array.isArray(record.runs))throw Error('Invalid catalog qualification');
+    return new Set(record.runs.flatMap(({profile,runId,profileHash})=>{
+      if(!catalogProfile(profile)||adapter.profiles[profile].sha256!==profileHash||!/^[a-f0-9-]{36}$/.test(runId))return [];
+      const run=store.get(runId);
+      return run?.phase==='completed'&&run.spec?.modelProfile===profile&&/^catalog-smoke-[a-f0-9-]{36}$/.test(run.sessionId)&&run.artifacts?.length?[profile]:[];
+    }));
+  };
   const searchConfig=loadSearchConfiguration(root);
   // Search is always ownership- and handshake-protected. Legacy explicit false
   // disables search; it never selects an unprotected path. A missing probe

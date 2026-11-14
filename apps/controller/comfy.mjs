@@ -4,6 +4,8 @@ import { lstat, mkdir, realpath, readFile, open } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import { qualifiedWorkflowModels, validateWorkflowSnapshot,validateWorkflowGraph,workflowGraphHash,WORKFLOW_ROLES,MODEL_PROFILES,MOSS_PROFILE } from './workflows.mjs';
 import {MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS} from './media-modes.mjs';
 import {buildMossOfficialGraph,validateMossOfficialGraph,inspectMossOfficialSchemas} from './moss-official.mjs';
@@ -11,6 +13,7 @@ import {QWEN21_PROFILES,buildQwen21Graph,validateQwen21Graph} from './qwen21-wor
 import {makePreflightError,safePreflightIssue} from './preflight-diagnostics.mjs';
 import {UPSCALE_PROFILE,RESIZE_PROFILE,RETIRED_VIDEO_PROFILES,assertActiveProfile,assertModeProfile,comboChoices,mossInputTemplate} from './media-modes.mjs';
 import {upscaleTemplate} from './upscale-workflow.mjs';
+import {catalogProfile,catalogDefaultGraph,validateCatalogGraph,buildCatalogGraph,validateCatalogSchemas} from './catalog-profiles.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const DEFAULT_PROFILE = fileURLToPath(new URL('../../workflows/approved/qwen-photo-v1.json', import.meta.url));
@@ -27,6 +30,7 @@ const EXPECTED_NODES = {
 const MODEL_INPUTS = [['6', 'vae_name'], ['7', 'unet_name'], ['108', 'clip_name']];
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const executeFile = promisify(execFile);
 const canonicalModel = value => String(value).replaceAll('\\', '/');
 
 function assertId(value, label) {
@@ -224,7 +228,7 @@ async function ensureSafeDirectory(root, destination) {
 
 export class ComfyAdapter {
   constructor({ baseUrl = 'http://127.0.0.1:8189', outputRoot, profilePath = DEFAULT_PROFILE,modelProfile='qwen-photo-v1',profilePaths={},
-    assets=null,timeoutMs = 10_000, releaseMinFreeBytes = DEFAULT_MIN_FREE, releaseTimeoutMs = 45_000,
+    assets=null,mediaPython=null,timeoutMs = 10_000, releaseMinFreeBytes = DEFAULT_MIN_FREE, releaseTimeoutMs = 45_000,
     releasePollMs = 1_000 } = {}) {
     const url = new URL(baseUrl);
     if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
@@ -238,6 +242,7 @@ export class ComfyAdapter {
     if (!Number.isFinite(releaseMinFreeBytes) || releaseMinFreeBytes < 0) throw new TypeError('Invalid release memory threshold');
     this.baseUrl = url.origin;
     this.assets=assets;
+    this.mediaPython=mediaPython;
     this.outputRoot = path.resolve(outputRoot);
     this.timeoutMs = timeoutMs;
     this.releaseMinFreeBytes = releaseMinFreeBytes;
@@ -247,6 +252,11 @@ export class ComfyAdapter {
     this.modelProfile=modelProfile;this.profiles={};
     for(const [id,filename]of Object.entries({...profilePaths,[modelProfile]:profilePath})){
       if(!Object.hasOwn(MODEL_PROFILES,id))throw new Error('Unknown configured image model');
+      if(catalogProfile(id)){
+        const graph=catalogDefaultGraph(id);
+        this.profiles[id]={id,graph,path:null,sha256:workflowGraphHash(graph)};
+        continue;
+      }
       const absolute=path.resolve(filename),bytes=readFileSync(absolute),graph=JSON.parse(bytes.toString('utf8'));
       validateProfile(graph,id);this.profiles[id]={id,graph,path:absolute,sha256:sha256(bytes)};
     }
@@ -316,7 +326,7 @@ export class ComfyAdapter {
     // Official drafts may explicitly select a different precision/encoder
     // than the baseline profile (for example MOSS depth or Qwen BF16). Check
     // the actual immutable draft's loaders rather than a different template.
-    const modelGraph=[...MOSS_OFFICIAL_IDS,...QWEN21_OFFICIAL_IDS].includes(selected.id)&&spec.workflow?.graph?spec.workflow.graph:selected.graph;
+    const modelGraph=spec.workflow?.graph&&([...MOSS_OFFICIAL_IDS,...QWEN21_OFFICIAL_IDS].includes(selected.id)||catalogProfile(selected.id))?spec.workflow.graph:selected.graph;
     const models = qualifiedWorkflowModels(modelGraph,selected.id).map(model => {
       const input=model.input,type=model.nodeType,desired=model.name;
       const declaration = objects[type]?.input?.required?.[input] ?? objects[type]?.input?.optional?.[input];
@@ -337,7 +347,9 @@ export class ComfyAdapter {
     let workflowError=null;
     if(spec.workflow){
       try{
-        if(QWEN21_OFFICIAL_IDS.includes(selected.id)){
+        if(catalogProfile(selected.id)){
+          this.checkCatalogSnapshot(spec,selected,objects);
+        }else if(QWEN21_OFFICIAL_IDS.includes(selected.id)){
           const w=spec.workflow,variant=selected.id===QWEN21_PROFILES.base?'base':'turbo';
           if(w.schemaVersion!==5||w.modelProfile!==selected.id||w.request?.variant!==variant||w.mode!==spec.mode||w.request?.mode!==spec.mode||w.request?.sessionId!==spec.assetSessionId||w.request?.filenamePrefix!==undefined||workflowGraphHash(w.graph)!==w.sha256)throw makePreflightError('WORKFLOW_CONTRACT_MISMATCH');
           const checked=validateQwen21Graph(w.graph,{options:w.request,objects});
@@ -360,7 +372,7 @@ export class ComfyAdapter {
         }
       }catch(error){workflowError=error.message;diagnostics.push(safePreflightIssue({code:error.preflightCode,field:error.preflightField})??{code:'WORKFLOW_VALIDATION_FAILED'});}
     }
-    if([...MOSS_OFFICIAL_IDS,...QWEN21_OFFICIAL_IDS].includes(selected.id)&&!spec.workflow&&spec.prompt!==undefined){workflowError='Official workflow snapshot is required';diagnostics.push({code:'WORKFLOW_CONTRACT_MISMATCH'});}
+    if((catalogProfile(selected.id)||[...MOSS_OFFICIAL_IDS,...QWEN21_OFFICIAL_IDS].includes(selected.id))&&!spec.workflow&&spec.prompt!==undefined){workflowError='A prepared workflow snapshot is required';diagnostics.push({code:'WORKFLOW_CONTRACT_MISMATCH'});}
     let memory;try{memory=gpuEvidence(stats);}catch{throw makePreflightError('RESOURCE_OBSERVATION_UNAVAILABLE');}
     return {
       queueEmpty: running.length === 0 && pending.length === 0,
@@ -369,6 +381,17 @@ export class ComfyAdapter {
         profile: selected.id, profilePath: selected.path, profileSha256: selected.sha256,
         nodeCount: Object.keys(selected.graph).length, memory },
     };
+  }
+
+  checkCatalogSnapshot(spec,selected,objects) {
+    const w=spec.workflow;
+    if(!objects||w?.schemaVersion!==6||w.modelProfile!==selected.id||w.request?.modelProfile!==selected.id||
+      w.mode!==spec.mode||w.request.mode!==spec.mode||workflowGraphHash(w.graph)!==w.sha256||
+      workflowGraphHash(w.request.inputAssets)!==workflowGraphHash(spec.inputAssets??[]))throw makePreflightError('WORKFLOW_CONTRACT_MISMATCH');
+    const checked=validateCatalogGraph(w.graph,w.request,{installed:objects});
+    if(workflowGraphHash(checked.output)!==workflowGraphHash(w.output))throw makePreflightError('WORKFLOW_CONTRACT_MISMATCH','output');
+    for(const [field,value] of Object.entries(checked.parameters))if(value!==spec[field])throw makePreflightError('WORKFLOW_PARAMETER_MISMATCH',field);
+    return checked;
   }
 
   buildPrompt(spec, { runId, promptId, controllerId }) {
@@ -387,6 +410,19 @@ export class ComfyAdapter {
     const width = spec.width ?? (video?512:1376);
     const height = spec.height ?? (video?288:768);
     const steps = spec.steps ?? 25;
+    if(catalogProfile(spec.modelProfile??spec.workflow?.modelProfile)){
+      const selected=this.selectProfile(spec),w=spec.workflow;
+      this.checkCatalogSnapshot(spec,selected,this.workflowObjects);
+      const prefix=`controller/${runId}/${promptId}/${w.output.frames?'video':'image'}`;
+      const {graph,output}=buildCatalogGraph(w.request,{prefix,installed:this.workflowObjects});
+      validateCatalogSchemas(graph,this.workflowObjects);
+      const ownership={controller_id:controllerId,run_id:runId,prompt_id:promptId};
+      const contract={version:6,request:w.request,output,graphSha256:workflowGraphHash(graph)};
+      const draft={id:w.id,sha256:w.sha256,model_profile:selected.id};
+      const metadata={local_genai:ownership,model_profile:selected.id,workflow_contract:contract,workflow_draft:draft};
+      this.known.set(promptId,{ownership,...output});
+      return {prompt:graph,extra_data:{...metadata,extra_pnginfo:metadata},client_id:promptId,prompt_id:promptId};
+    }
     if(QWEN21_OFFICIAL_IDS.includes(spec.modelProfile??spec.workflow?.modelProfile)){
       const selected=this.selectProfile(spec),w=spec.workflow,variant=selected.id===QWEN21_PROFILES.base?'base':'turbo';
       if(!this.workflowObjects||!w||w.schemaVersion!==5||w.modelProfile!==selected.id||w.request?.variant!==variant||w.mode!==mode||w.request?.mode!==mode||w.request?.sessionId!==spec.assetSessionId||w.request?.filenamePrefix!==undefined||workflowGraphHash(w.graph)!==w.sha256)throw new Error('Official Qwen workflow identity mismatch');
@@ -533,7 +569,12 @@ export class ComfyAdapter {
       const contract=extra.workflow_contract;
       if(contract.graphSha256!==workflowGraphHash(graph))throw new Error('History workflow contract or graph hash mismatch');
       this.workflowObjects??=await this.request('/object_info');
-      if(QWEN21_OFFICIAL_IDS.includes(extra.model_profile)&&contract.version===5){
+      if(catalogProfile(extra.model_profile)&&contract.version===6){
+        const submitted=this.buildPrompt(spec,{runId,promptId,controllerId});
+        if(extra.model_profile!==spec.modelProfile||workflowGraphHash(graph)!==workflowGraphHash(submitted.prompt)||
+            workflowGraphHash(contract)!==workflowGraphHash(submitted.extra_data.workflow_contract))throw new Error('Catalog history differs from the submitted run');
+        saveId='save';expected=contract.output;historyRoles={sampler:'sampler'};
+      }else if(QWEN21_OFFICIAL_IDS.includes(extra.model_profile)&&contract.version===5){
         const variant=extra.model_profile===QWEN21_PROFILES.base?'base':'turbo';
         if(contract.request?.variant!==variant||contract.request?.filenamePrefix!==undefined)throw new Error('History official Qwen model contract mismatch');
         const options={...contract.request,filenamePrefix:`controller/${runId}/${promptId}/image`},checked=validateQwen21Graph(graph,{options,objects:this.workflowObjects,modelsInstalled:false});
@@ -563,8 +604,9 @@ export class ComfyAdapter {
     }
     const save = graph?.[saveId];
     const expectedFolder = `controller/${runId}/${promptId}`;
+    if(expected.frames&&catalogProfile(extra?.model_profile))return this.collectCatalogVideo(history.outputs?.[saveId]?.images,save,expected,expectedFolder,destination??path.join(this.outputRoot,runId),promptId);
     const pngSave=save?.class_type==='SaveImageAdvanced'&&save.inputs?.format==='png';
-    const nativeMossSave=save?.class_type==='SaveImage'&&[MOSS_PROFILE,UPSCALE_PROFILE,RESIZE_PROFILE,...MOSS_OFFICIAL_IDS].includes(history.prompt[3]?.model_profile);
+    const nativeMossSave=save?.class_type==='SaveImage'&&([MOSS_PROFILE,UPSCALE_PROFILE,RESIZE_PROFILE,...MOSS_OFFICIAL_IDS].includes(extra?.model_profile)||catalogProfile(extra?.model_profile));
     if ((!pngSave&&!nativeMossSave)||save.inputs?.filename_prefix !== `${expectedFolder}/image`) throw new Error('Unexpected output node or prefix');
     if (![expected.width, expected.height].every(Number.isInteger)) throw new Error('History does not contain explicit image dimensions');
     const references = history.outputs?.[saveId]?.images ?? [];
@@ -597,6 +639,31 @@ export class ComfyAdapter {
       artifacts.push({ name, path: artifactPath, sha256: digest, ...dimensions, mime: 'image/png',...(verifiedHistoryEvidence?{historyEvidence:verifiedHistoryEvidence}:{}) });
     }
     return artifacts;
+  }
+
+  async collectCatalogVideo(references,save,expected,folder,destination,promptId) {
+    if(save?.class_type!=='SaveVideo'||save.inputs?.filename_prefix!==folder+'/video'||!this.mediaPython)throw new Error('Video save contract unavailable');
+    if(!Array.isArray(references)||references.length!==1)throw new Error('Expected one video output');
+    const {filename,subfolder,type}=references[0];
+    if(type!=='output'||typeof filename!=='string'||!/^video_\d{5}_\.mp4$/.test(filename)||canonicalModel(subfolder)!==folder)throw new Error('Unexpected video output reference');
+    const dir=await ensureSafeDirectory(this.outputRoot,destination);
+    const name=`${promptId}-${filename}`,file=path.join(dir,name);
+    const bytes=await this.request('/view?'+new URLSearchParams({filename,subfolder:folder,type:'output'}),{bytes:true});
+    const sha256= createHash('sha256').update(bytes).digest('hex');
+    try {
+      const handle=await open(file,'wx',0o600);
+      try{await handle.writeFile(bytes);await handle.sync();}finally{await handle.close();}
+    }catch(error){
+      if(error.code!=='EEXIST'||!(await lstat(file)).isFile()||!bytes.equals(await readFile(file)))throw error;
+    }
+    const script=fileURLToPath(new URL('./media_probe.py',import.meta.url));
+    const {stdout}=await executeFile(this.mediaPython,['-I','-B',script,file,JSON.stringify(expected)],{windowsHide:true,timeout:60000,maxBuffer:16384});
+    const {previews,...media}=JSON.parse(stdout);
+    if(!Array.isArray(previews)||previews.length!==3)throw new Error('Video frame verification is incomplete');
+    return [{name,path:file,sha256,mime:'video/mp4',...media},...previews.map(frame=>{
+      if(!frame.name.startsWith(path.parse(name).name+'-frame-')||path.basename(frame.name)!==frame.name)throw new Error('Invalid video frame reference');
+      return {...frame,path:path.join(dir,frame.name)};
+    })];
   }
 
   async release({assertEpoch=async()=>{},minFreeBytes=this.releaseMinFreeBytes}={}) {

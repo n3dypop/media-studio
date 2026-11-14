@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, lstatSync, readFileSync, openSync, writeFileSync
 import { dirname } from 'node:path';
 import { assertCoreTable } from './schema-integrity.mjs';
 import {MODEL_PROFILES} from './workflows.mjs';
-import {mediaIntent,assertModeProfile,assertActiveProfile,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS} from './media-modes.mjs';
+import {mediaIntent,assertModeProfile,assertActiveProfile,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS,isVideoMode,usesPreparedWorkflow} from './media-modes.mjs';
+import {catalogProfile,catalogLimits,videoCatalogMode} from './catalog-profiles.mjs';
 
 export const terminalPhases = new Set(['completed', 'failed', 'cancelled']);
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -35,10 +36,12 @@ export function normalizeRequest(input) {
   const seed = input.seed === undefined ? '20261102' : input.seed;
   if (typeof seed !== 'string' || !/^(0|[1-9][0-9]{0,15})$/.test(seed) || BigInt(seed) > BigInt(Number.MAX_SAFE_INTEGER)) throw new ApiError(400, 'seedは0〜9007199254740991の整数文字列です。');
   const width = input.width ?? 768, height = input.height ?? 1024, steps = input.steps ?? 25;
-  const media=mediaIntent(input),video=media.mode==='video',upscale=media.mode==='upscale';
+  const media=mediaIntent(input),video=isVideoMode(media.mode),upscale=media.mode==='upscale',fixed=catalogProfile(input.modelProfile);
   if(input.modelProfile)assertModeProfile(media.mode,input.modelProfile);
-  const mossOfficial=MOSS_OFFICIAL_IDS.includes(input.modelProfile),qwenOfficial=QWEN21_OFFICIAL_IDS.includes(input.modelProfile),official=mossOfficial||qwenOfficial;
-  const min=video?256:upscale?64:qwenOfficial?32:mossOfficial?256:512,max=video?832:upscale||official?4096:1536,multiple=upscale?1:mossOfficial?16:32,maxPixels=video?500000:upscale||qwenOfficial?8388608:mossOfficial?4194304:1500000;
+  const mossOfficial=MOSS_OFFICIAL_IDS.includes(input.modelProfile),qwenOfficial=QWEN21_OFFICIAL_IDS.includes(input.modelProfile),official=usesPreparedWorkflow(input.modelProfile);
+  const {minDimension:min,maxDimension:max,dimensionMultiple:multiple,maxPixels}=fixed?catalogLimits(input.modelProfile):{
+    minDimension:video?256:upscale?64:qwenOfficial?32:mossOfficial?256:512,maxDimension:video?832:upscale||official?4096:1536,
+    dimensionMultiple:upscale?1:mossOfficial?16:32,maxPixels:video?500000:upscale||qwenOfficial?8388608:mossOfficial?4194304:1500000};
   if (![width, height].every(n => Number.isInteger(n) && n >= min && n <= max && n % multiple === 0) || width * height > maxPixels) throw new ApiError(400, '出力寸法が選択した制作モードの範囲外です。');
   if (!Number.isInteger(steps) || steps < 1 || steps > (video?30:official?10000:40)) throw new ApiError(400, 'stepsが制作モードの範囲外です。');
   if(input.modelProfile!==undefined&&!Object.hasOwn(MODEL_PROFILES,input.modelProfile))throw new ApiError(400,'指定した画像モデルは登録されていません。');
@@ -46,7 +49,11 @@ export function normalizeRequest(input) {
   if(input.mode!==undefined||input.inputAssetId!==undefined||input.inputAssetIds!==undefined||input.referenceAssetIds!==undefined)Object.assign(options,media);
   if(['i2i','edit'].includes(media.mode)&&!official){const denoise=input.denoise??0.65;if(typeof denoise!=='number'||!Number.isFinite(denoise)||denoise<=0||denoise>=1)throw new ApiError(400,'画像入力のdenoiseは0より大きく1未満です。');options.denoise=denoise;}
   else if(input.denoise!==undefined)throw new ApiError(400,'denoiseはi2iまたはeditで指定してください。');
-  if(video){const frames=input.frames??33,fps=input.fps??16;if(!Number.isInteger(frames)||frames<17||frames>49||frames%4!==1||!Number.isInteger(fps)||fps<8||fps>24)throw new ApiError(400,'動画のフレーム数またはfpsが範囲外です。');Object.assign(options,{frames,fps});}
+  if(videoCatalogMode(media.mode)){
+    const {frames,fps}=input,range=catalogLimits(input.modelProfile);
+    if(!Number.isInteger(frames)||frames<range.minFrames||frames>range.maxFrames||(frames-5)%range.frameStep||fps!==24)throw new ApiError(400,'FastH3のフレーム数またはfpsが範囲外です。');
+    Object.assign(options,{frames,fps});
+  }else if(video){const frames=input.frames??33,fps=input.fps??16;if(!Number.isInteger(frames)||frames<17||frames>49||frames%4!==1||!Number.isInteger(fps)||fps<8||fps>24)throw new ApiError(400,'動画のフレーム数またはfpsが範囲外です。');Object.assign(options,{frames,fps});}
   return { requestId: input.requestId, spec: { prompt: official?input.prompt:input.prompt.trim(), negativePrompt: official?(input.negativePrompt??''):(input.negativePrompt?.trim() ?? ''), seed, width, height, steps,...(input.modelProfile!==undefined?{modelProfile:input.modelProfile}:{}),...options } };
 }
 

@@ -1,6 +1,6 @@
 import {ApiError,digest} from './store.mjs';
 import {validateSession,isDefiniteWorkflowRejection} from './productions.mjs';
-import {assertActiveProfile,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS} from './media-modes.mjs';
+import {assertActiveProfile,usesPreparedWorkflow} from './media-modes.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {randomUUID} from 'node:crypto';
 import {scheduleOwnedLaunch} from './owned-launch.mjs';
@@ -80,6 +80,7 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
     // listed profile; discovery failure is not proof that a model is available.
     if(!productions.list(session,input?.requestId).some(p=>p.requestId===input?.requestId)){
       const current=await workflows.catalog({modelProfile:requestedProfile,mode:input?.brief?.mode??undefined,
+        includeCatalogCandidates:role==='admin'&&/^catalog-smoke-[a-f0-9-]{36}$/.test(session),
         inputAssetId:input?.brief?.inputAssetId??null,sessionId:session});
       const requestedMode=input?.brief?.mode??'t2i';
       if(!current.modelProfiles?.some(profile=>profile.id===requestedProfile&&profile.available===true)||!current.capabilities?.some(item=>item.modelProfile===requestedProfile&&item.mode===requestedMode))
@@ -144,7 +145,7 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
     const input=await body(req),operation=action==='render'?'render':'prepared-render';let result;
     try{
       const production=productions.get(id,session);productions.assertNoPendingWorkflow(id,session);assertActiveProfile(production.brief.modelProfile);
-      if(action==='render'&&[...MOSS_OFFICIAL_IDS,...QWEN21_OFFICIAL_IDS].includes(production.brief.modelProfile))throw new ApiError(409,'この公式workflowは保存済み条件で生成してください。render-preparedを使用し、設定変更は新しいdraftに固定してください。');
+      if(action==='render'&&usesPreparedWorkflow(production.brief.modelProfile))throw new ApiError(409,'この公式workflowは保存済み条件で生成してください。render-preparedを使用し、設定変更は新しいdraftに固定してください。');
       if(action==='render-prepared'&&(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['requestId','workflowId','expectedRevision'].includes(key))||typeof input.workflowId!=='string'||!Number.isSafeInteger(input.expectedRevision)))throw new ApiError(400,'workflowId、expectedRevision、requestIdのみを指定してください。');
       const workflow=await workflows.get(input.workflowId);result=action==='render'?productions.render(id,session,input,workflow):productions.renderPrepared(id,session,input,workflow);
     }catch(error){rejectBeforeAdmission(operation,id,input,error);return true;}

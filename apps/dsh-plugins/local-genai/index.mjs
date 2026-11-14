@@ -5,7 +5,7 @@ import { loadDshBindings, loadDshScopeBindings, loadDshNativeExecutor, desktopPa
 import { selectNativeToolMode } from './native-tool-mode.mjs';
 import { agentRole, guideForRole } from './roles.mjs';
 import { installRoleRestriction } from './role-scope.mjs';
-import { listUserImages, imageImportBody, assetReceipt, currentUserRequest, requestedPngSize } from './inputs.mjs';
+import { listUserImages, imageImportBody, assetReceipt, currentUserRequest, currentUserChoices, requestedPngSize } from './inputs.mjs';
 import {executionEvidence} from './execution-evidence.mjs';
 import {dshPreflightDiagnostic} from './preflight-diagnostic.mjs';
 import {deliveryPosition, singleVisibleImageDelivery, visibleDelivery} from './evaluation-evidence.mjs';
@@ -13,8 +13,9 @@ import {createRuntimeConfig,runtimeRootOf} from '../shared/plugin-config.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
 import {createDurableRuntime} from './durable-runtime.mjs';
 import {validateMossCanvas} from '../../controller/moss-official.mjs';
+import {catalogProfile} from '../../controller/catalog-profiles.mjs';
 import { MOSS_OFFICIAL_IDS, QWEN21_OFFICIAL_IDS, WORKFLOW_QUERY_LIMIT, workflowLibraryFile, workflowLibraryId, MODEL_PROFILES as KNOWN_PROFILES,
-  activeModelProfiles as MODEL_PROFILES, MEDIA_MODES as MODES } from '../../controller/media-modes.mjs';
+  activeModelProfiles as MODEL_PROFILES, MEDIA_MODES as MODES,preparedParameters,preparedWorkflowVersions,usesPreparedWorkflow } from '../../controller/media-modes.mjs';
 
 export const name = 'local-genai';
 export const inject = ['tools', 'attachments', 'llm', 'systemPrompt', 'agents', 'sessions', 'sessionPersistence'];
@@ -126,6 +127,7 @@ function productionValue(result) {
 }
 
 function preparationTool(modelProfile) {
+  if (catalogProfile(modelProfile)) return 'local_catalog_prepare';
   if (MOSS_OFFICIAL_IDS.includes(modelProfile)) return 'local_moss_official_prepare';
   if (QWEN21_OFFICIAL_IDS.includes(modelProfile)) return 'local_qwen21_prepare';
   if (MODEL_PROFILES.includes(modelProfile)) return 'local_image_prepare';
@@ -187,7 +189,7 @@ export function workflowCatalogForAgent(catalog, role, { mode: requestedMode } =
   const productionLimits = limits && Object.fromEntries([
     'minDimension', 'maxDimension', 'dimensionMultiple', 'maxPixels', 'maxSteps',
     'batch', 'maxGeneratorInputs', 'maxInputDimension', 'maxInputPixels',
-    'aiUpscale', 'minFrames', 'maxFrames', 'minFps', 'maxFps',
+    'aiUpscale', 'minFrames', 'maxFrames', 'frameStep', 'minFps', 'maxFps', 'minGeneratorInputs',
   ].filter(key => limits[key] !== undefined).map(key => [key, limits[key]]));
   return {
     ...Object.fromEntries(['modelProfile', 'requestedProfile', 'requestedProfileStatus', 'mode', 'templateStatus', 'validationScope']
@@ -326,6 +328,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   const templateOnly = role === 'studio' || role === 'image-generation';
   const allowedTools = new Set([...NATIVE_TOOLS.filter(name => !templateOnly || name !== 'local_workflow_draft'), ...(templateOnly ? ['local_image_prepare'] : []), ...(role === 'studio' ? ['local_moss_official_prepare','local_qwen21_prepare','local_prepared_render','local_moss_pe_start','local_moss_pe_result','local_moss_pe_decide','local_moss_pe_reconcile','local_qwen_pe_start','local_qwen_pe_result','local_qwen_pe_decide','local_qwen_pe_reconcile', 'local_input_images', 'local_asset_import', 'local_asset_view', 'local_production_iteration', 'local_production_history', 'local_production_feedback', 'local_resource_status', 'skill'] : []), 'ask_user_question']);
   if (role === 'studio') allowedTools.add('local_workflow_library');
+  if (role === 'studio') allowedTools.add('local_catalog_prepare');
   for(const name of ['local_asset_reconcile','local_production_action_reconcile','local_search_reconcile','local_pe_receipt_reconcile','local_cancel_reconcile','local_mutation_pending'])allowedTools.add(name);
   const settings = await (dependencies.loadConfiguration ?? loadConfiguration)(config);
   const fetchImpl = dependencies.fetch ?? globalThis.fetch;
@@ -507,17 +510,56 @@ export async function createPlugin(ctx, config, dependencies = {}) {
 
   async function checkRequestedWorkflow(args, exec) {
     if (role !== 'studio') return null;
-    const reference = currentUserRequest(exec.agent.session);
-    if (!reference) return null;
-    const result = await request('/api/workflow-library/selection', {
-      sessionId: sessionIdentity(exec), method:'POST', body:{reference}, signal:exec.signal,
+    const sessionId = sessionIdentity(exec), signal = exec.signal, mode = args.mode ?? 't2i';
+    const lookup = reference => request('/api/workflow-library/selection', {
+      sessionId, method:'POST', body:{reference}, signal,
     });
+    let result;
+    for (const {text,fromOption} of currentUserChoices(exec.agent.session)) {
+      if (text.length > 256 || /[?？]|(?:使わない|実行しない|生成しない|案内のみ|説明のみ|手順|説明を|キャンセル|don['’]t|do not|no generation|cancel|instructions|explain)/iu.test(text)) {
+        if (/^(?:生成しない|実行しない|案内のみ|説明のみ|キャンセル|do not generate|no generation|cancel)(?:[。.!\s(（]|$)/iu.test(text)) {
+          return { status:'generation_declined', guidance:'The user declined generation. Finish without creating a production.' };
+        }
+        continue;
+      }
+      const choice = await lookup(text);
+      if (choice.total > 0) { result = choice; break; }
+      // Older DSH option labels use the public model name rather than a
+      // workflow ID. Resolve a unique model independently of the tool args.
+      const normalize = value => value.normalize('NFKC').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+      const answer = ' '+normalize(text)+' ';
+      const profiles = Object.entries(KNOWN_PROFILES).filter(([id, {label}]) => {
+        if (!MODEL_PROFILES.includes(id)) return false;
+        if (answer.includes(' '+normalize(id)+' ')) return true;
+        const publicName = label.replace(/\s*\(.+\)$/, '');
+        const names = [id, label, publicName];
+        if (id.startsWith('qwen-image-2.1-')) names.push(publicName.replace('Qwen-Image','Qwen'));
+        return names.some(name => fromOption ? answer.includes(' '+normalize(name)+' ') : normalize(text) === normalize(name));
+      });
+      if (!profiles.length) continue;
+      const explicit = profiles.filter(([id]) => answer.includes(' '+normalize(id)+' '));
+      const candidates = explicit.length ? explicit : profiles;
+      const profile = candidates.length === 1 ? candidates[0][0] : null;
+      if (!profile) return { status:'workflow_selection_required', guidance:'The selected option matches multiple model profiles. Ask for the exact model or workflow ID.' };
+      const live = await request('/api/workflow-catalog?'+new URLSearchParams({modelProfile:profile,mode}),{sessionId,signal});
+      if (!live.capabilities?.some(item => item.modelProfile === profile && item.mode === mode)) {
+        return { status:'workflow_unavailable_in_dsh', modelProfile:profile, mode,
+          guidance:'The selected model and operation are not available together. Explain the gap before any production.' };
+      }
+      result = {total:1,workflows:[{dshProfile:profile,mode}]};
+      break;
+    }
+    if (!result) {
+      const reference = currentUserRequest(exec.agent.session);
+      if (!reference) return null;
+      result = await lookup(reference);
+    }
     if (result.total > 1) return { status:'workflow_selection_required', workflows:result.workflows.slice(0,8),
       guidance:'Ask which named workflow to use before creating a production. No production was created.' };
     const [selected] = result.workflows;
     if (selected && !selected.dshProfile) return { status:'workflow_unavailable_in_dsh', workflow:selected,
-      guidance:'Explain the standalone ComfyUI status and maintenance handoff. No production was created. Use an alternative only after the user explicitly selects it in a new request.' };
-    if (selected && ((args.modelProfile && args.modelProfile !== selected.dshProfile) || (args.mode ?? 't2i') !== selected.mode)) {
+      guidance:'Explain the standalone ComfyUI status and maintenance handoff. No production was created. A direct user instruction or a confirmed answer to a model choice can select an alternative.' };
+    if (selected && ((args.modelProfile && args.modelProfile !== selected.dshProfile) || mode !== selected.mode)) {
       return { status:'workflow_selection_mismatch', workflow:selected,
         guidance:'Use the selected workflow’s model profile and operation. No production was created.' };
     }
@@ -765,6 +807,18 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     const w = result.workflow;
     return { ...preparedWorkflowResult(result, role), renderParameters: { prompt: w.request.prompt, negativePrompt: w.request.negativePrompt ?? '', seed: w.request.seed ?? '42', width: w.output.width, height: w.output.height, steps: w.request.steps ?? (w.request.variant === 'turbo' ? 8 : 25) }, negativePromptEffective: w.negativePromptEffective };
   });
+  register('local_catalog_prepare','Prepare the fixed catalog workflow selected for this production. Supply its exposed settings and exact ordered input IDs. Follow the returned next action. This does not generate.',{
+    productionId:productionParameter, expectedRevision:revisionParameter,modelProfile:{...modelProfileParameter,required:true},
+    mode:{...modeParameter,required:true},rationale:requiredString('Reason for the selected workflow.'),
+    official:{...objectSchema,required:true,description:'Prompt, optional negativePrompt (ControlNet only), seed (decimal string), width, height, steps, and for video frames and fps.'},
+    inputAssetIds:{type:'array',items:{type:'string'},description:'Exact ordered input-purpose IDs. Supply ControlNet maps in workflow order and FastH3 start frame first.'},
+  },async(args,exec)=>{
+    if(!catalogProfile(args.modelProfile))throw new ControllerError('Use the preparation tool for the fixed production profile.');
+    await checkOfficialPreparation(args,exec,'local_catalog_prepare');
+    const result=await mutate('/api/workflows/draft',{...args,requestId:requestIdFor(sessionIdentity(exec),exec.callId,'workflow')},exec);
+    if(result.state==='rejected')return result;
+    return {...preparedWorkflowResult(result,role),renderParameters:preparedParameters(result.workflow)};
+  });
   async function peResult(productionId,query,exec,{wait=false,family='moss'}={}){
     const sessionId=sessionIdentity(exec),began=now(),base=`/api/${family}-pe`,field=family==='qwen'?'qwenPe':'mossPe',decisionField=family==='qwen'?'qwenPeDecision':'mossPeDecision';let run;
     if(query.requestId){
@@ -935,7 +989,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     const value=await request(`/api/productions/${encodeURIComponent(args.productionId)}/run-by-request?${new URLSearchParams({requestId:args.requestId})}`,{sessionId,signal:exec.signal});
     const p=value?.production,run=value?.run,s=run?.spec,w=s?.workflow,req=w?.request,out=w?.output;
     const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
-    const official=/^(?:moss-image-(?:sft|base)-official-v1|qwen-image-2\.1-(?:base|turbo)-v1)$/,legacy=/^moss-image-sft-int8-v1$/;
+    const legacy=/^moss-image-sft-int8-v1$/;
     if(!p||!run||!s||!w||!out||!p.brief||run.requestId!==args.requestId||run.sessionId!==sessionId||run.productionId!==args.productionId||p.id!==args.productionId||p.sessionId!==sessionId||typeof run.id!=='string'||!run.id||
       !Number.isSafeInteger(b?.expectedRevision)||run.productionRevision!==b.expectedRevision+1||p.revision!==run.productionRevision||p.latestRunId!==run.id||p.cancelRequested!==false||run.cancelRequested!==false||!Array.isArray(p.attempts)||p.attempts.at(-1)!==run.id||p.attempts.filter(id=>id===run.id).length!==1||
       hash(p.brief)!==p.briefHash||s.briefHash!==p.briefHash||hash(s)!==run.specHash||s.assetSessionId!==sessionId||s.enhancer!==false||s.modelProfile!==p.brief.modelProfile||
@@ -943,8 +997,8 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       s.mode!==(p.brief.mode??'t2i')||s.inputAssetId!==(p.brief.inputAssetId??null)||JSON.stringify(s.invariants)!==JSON.stringify(p.brief.invariants)||
       !Array.isArray(s.referenceAssets)||JSON.stringify(s.referenceAssets.map(x=>x.id))!==JSON.stringify(p.brief.referenceAssetIds??[]))throw new ControllerError('Saved run, workflow, production or exact request evidence differs; keep the original request unresolved.');
     if(pending.path===`${base}-prepared`){
-      if(!req||!official.test(p.brief.modelProfile??'')||![4,5].includes(w.schemaVersion)||JSON.stringify(w.inputAssetIds)!==JSON.stringify(p.brief.inputAssetIds??(p.brief.inputAssetId?[p.brief.inputAssetId]:[]))||
-        s.prompt!==req.prompt||s.negativePrompt!==(req.negativePrompt??'')||s.seed!==(req.seed??'42')||s.width!==out.width||s.height!==out.height||s.steps!==(req.steps??(w.schemaVersion===5&&req.variant==='turbo'?8:w.mode==='edit'&&w.schemaVersion!==5?30:25)))throw new ControllerError('Saved prepared render differs; keep the original request unresolved.');
+      if(!req||!usesPreparedWorkflow(p.brief.modelProfile)||!preparedWorkflowVersions.includes(w.schemaVersion)||JSON.stringify(w.inputAssetIds)!==JSON.stringify(p.brief.inputAssetIds??(p.brief.inputAssetId?[p.brief.inputAssetId]:[]))||
+        Object.entries(preparedParameters(w)).some(([key,value])=>s[key]!==value))throw new ControllerError('Saved prepared render differs; keep the original request unresolved.');
     }else{
       const mode=p.brief.mode??'t2i',expectedDenoise=['i2i','edit'].includes(mode)?(b.denoise??0.65):undefined;
       if(!legacy.test(p.brief.modelProfile??'')||![2,3].includes(w.schemaVersion)||!['t2i','i2i','edit'].includes(mode)||b.enhancer!==false||b.frames!==undefined||b.fps!==undefined||

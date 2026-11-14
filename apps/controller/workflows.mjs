@@ -4,6 +4,7 @@ import path from 'node:path';
 import {UPSCALE_PROFILE,RESIZE_PROFILE,VIDEO_PROFILE_ID,H3_PROFILE_ID,RETIRED_VIDEO_PROFILES,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS,QWEN21_MAX_INPUTS,MODEL_PROFILES,LEGACY_QWEN_PROFILE as PROFILE,MOSS_PROFILE,assertActiveProfile,mediaIntent,assertModeProfile,assertInputBinding,comboChoices,mossInputTemplate} from './media-modes.mjs';
 import {buildMossOfficialGraph,validateMossOfficialGraph,inspectMossOfficialSchemas,resolveMossOwnedInputs} from './moss-official.mjs';
 import {QWEN21_PROFILES,buildQwen21Graph,validateQwen21Graph,resolveQwen21OwnedInputs} from './qwen21-workflow.mjs';
+import {catalogProfile,catalogLimits,catalogModels,buildCatalogGraph,validateCatalogGraph,validateCatalogSchemas} from './catalog-profiles.mjs';
 import {UPSCALE_NODE_TYPES,upscaleModels,upscaleTemplate,validateUpscaleGraph} from './upscale-workflow.mjs';
 import {profileLedger,nodeLedger,coreModelLedger} from './model-ledger.mjs';
 import {comfyWorkflowLibrary} from './comfy-workflow-library.mjs';
@@ -61,6 +62,7 @@ const hashJson = value => createHash('sha256').update(JSON.stringify(stable(valu
 
 export function qualifiedWorkflowModels(profile, modelProfile = Object.values(profile ?? {}).some(node=>node?.class_type==='CLIPLoader')?MOSS_PROFILE:PROFILE) {
   if(!MODEL_PROFILES[modelProfile])throw new Error('Unknown image model profile');
+  if(catalogProfile(modelProfile))return catalogModels(profile);
   if([UPSCALE_PROFILE,RESIZE_PROFILE].includes(modelProfile))return upscaleModels(profile,modelProfile);
   assertActiveProfile(modelProfile);
   const native=modelProfile===MOSS_PROFILE||MOSS_OFFICIAL_IDS.includes(modelProfile)||QWEN21_OFFICIAL_IDS.includes(modelProfile);
@@ -416,7 +418,8 @@ export class WorkflowRegistry {
       catalog: objects => this.discoverCapabilities(objects).capabilities });
   }
 
-  discoverCapabilities(objects) {
+  discoverCapabilities(objects,{includeCatalogCandidates=false}={}) {
+    const qualified = includeCatalogCandidates ? null : this.qualifiedCatalogProfiles?.() ?? new Set();
     const availableModels=profile=>profile.models.map(model => {
       const schema = objects[model.nodeType];
       const choices = comboChoices(schema?.input?.required?.[model.input]);
@@ -424,11 +427,21 @@ export class WorkflowRegistry {
         && Array.isArray(choices) && choices.some(name => normalizeName(name) === normalizeName(model.name)) };
     });
     const runtimeAvailable=profile=>availableModels(profile).every(model=>model.available)&&([UPSCALE_PROFILE,RESIZE_PROFILE].includes(profile.id)?profile.types:Object.values(profile.graph).map(node=>node.class_type)).every(type=>objects[type]&&!objects[type].api_node&&!objects[type].dev_only);
-    const modelProfiles=Object.keys(this.profiles).filter(id=>!RETIRED_VIDEO_PROFILES.includes(id)).map(id=>this.profile(id)).filter(runtimeAvailable)
+    const modelProfiles=Object.keys(this.profiles).filter(id=>!RETIRED_VIDEO_PROFILES.includes(id))
+      .filter(id=>!catalogProfile(id)||qualified===null||qualified.has(id)).map(id=>this.profile(id)).filter(runtimeAvailable)
       .map(item=>({id:item.id,...MODEL_PROFILES[item.id],available:true,workflowEditsRequireRuntimeValidation:true,ledger:profileLedger(item.id)}));
     const availableIds=new Set(modelProfiles.map(item=>item.id));
     const availableNode=type=>objects[type]&&!objects[type].api_node&&!objects[type].dev_only;
     const capabilities=[{mode:'t2i',modelProfile:PROFILE},{mode:'t2i',modelProfile:MOSS_PROFILE},{mode:'i2i',modelProfile:MOSS_PROFILE,inputRequired:true},{mode:'edit',modelProfile:MOSS_PROFILE,inputRequired:true,identityPreservationGuaranteed:false},{mode:'upscale',modelProfile:UPSCALE_PROFILE,inputRequired:true,ai:true},{mode:'upscale',modelProfile:RESIZE_PROFILE,inputRequired:true,ai:false}].filter(item=>availableIds.has(item.modelProfile)&&(!['i2i','edit'].includes(item.mode)||['LoadImage','ImageScale','VAEEncode'].every(availableNode)));
+    for(const id of availableIds){
+      const fixed=catalogProfile(id);if(!fixed)continue;
+      const profile=this.profile(id),mapped=structuredClone(profile.graph);
+      for(const node of Object.values(mapped))for(const model of catalogModels({node})){
+        const options=comboChoices(objects[model.nodeType]?.input?.required?.[model.input]);
+        node.inputs[model.input]=options?.find(value=>normalizeName(value)===normalizeName(model.name))??model.name;
+      }
+      try{validateCatalogSchemas(mapped,objects);capabilities.push({modelProfile:id,mode:fixed.mode,inputRequired:fixed.inputs>0,qualification:'fixed-catalog-template',runtimeTested:qualified?.has(id)===true});}catch{}
+    }
     const exampleBinding={id:'11111111-1111-4111-8111-111111111111',purpose:'input',sha256:'a'.repeat(64),width:768,height:1024,comfyInputName:`controller-assets/${'a'.repeat(24)}/11111111-1111-4111-8111-111111111111-${'a'.repeat(64)}.png`};
     for(const id of MOSS_OFFICIAL_IDS.filter(id=>availableIds.has(id)))for(const candidateMode of (id===MOSS_OFFICIAL_IDS[0]?['t2i','layout','edit','depth']:['t2i','layout'])){
       const sample={modelProfile:id,mode:candidateMode,prompt:'schema check',negativePrompt:'',seed:'1',width:768,height:1024,...(candidateMode==='layout'?{layoutBoxes:[{x:0,y:0,width:100,height:100,kind:'object',description:'item'}]}:{}),...(['edit','depth'].includes(candidateMode)?{inputAssets:[{role:'source',binding:exampleBinding}]}:{})};
@@ -443,10 +456,10 @@ export class WorkflowRegistry {
     return {modelProfiles,availableIds,capabilities,availableModels,runtimeAvailable};
   }
 
-  async catalog({modelProfile=this.profileId,mode=([UPSCALE_PROFILE,RESIZE_PROFILE].includes(modelProfile)?'upscale':[VIDEO_PROFILE_ID,H3_PROFILE_ID].includes(modelProfile)?'video':'t2i'),inputAssetId=null,sessionId=null}={}, installedObjects) {
+  async catalog({modelProfile=this.profileId,mode=([UPSCALE_PROFILE,RESIZE_PROFILE].includes(modelProfile)?'upscale':[VIDEO_PROFILE_ID,H3_PROFILE_ID].includes(modelProfile)?'video':'t2i'),inputAssetId=null,sessionId=null,includeCatalogCandidates=false}={}, installedObjects) {
     if(typeof modelProfile!=='string'||!/^[-a-zA-Z0-9_.]{1,100}$/.test(modelProfile)){const error=new Error('Invalid requested model profile');error.status=400;throw error;}
     const objects = installedObjects ?? await this.installed();
-    const {modelProfiles,availableIds,capabilities,availableModels,runtimeAvailable}=this.discoverCapabilities(objects);
+    const {modelProfiles,availableIds,capabilities,availableModels,runtimeAvailable}=this.discoverCapabilities(objects,{includeCatalogCandidates});
     // No selected profile is silently substituted. An explicit name that is
     // absent from the live set may be uninstalled, unsupported or temporarily
     // unavailable; we do not infer which. No graph or model choices leak as
@@ -456,6 +469,9 @@ export class WorkflowRegistry {
       assetLimits:{purpose:'input is wired to ComfyUI; reference is for core understanding only'},capabilities,modelProfiles,coreModelLedger:coreModelLedger(),models:[],templates:[],nodeSchemas:{},limits:null,
       validationScope:'The requested profile and operation are not available together. Check installed assets, nodes and controller registration.'};
     assertModeProfile(mode,modelProfile);
+    if(catalogProfile(modelProfile))return {modelProfile,mode,capabilities,modelProfiles,models:availableModels(this.profile(modelProfile)),templates:[],
+      nodeSchemas:{},limits:catalogLimits(modelProfile),assetLimits:{purpose:'Ordered owned input assets; import control maps as input assets.'},
+      validationScope:'Prepared catalog workflow. Current GPU capacity is checked separately.'};
     if(QWEN21_OFFICIAL_IDS.includes(modelProfile)){
       const names=objects.TextEncodeQwenImage21?.input?.required?.images?.[1]?.template?.names;
       let nativeInputs=0;if(Array.isArray(names))while(nativeInputs<QWEN21_MAX_INPUTS&&names.includes(`image_${nativeInputs+1}`))nativeInputs++;
@@ -552,6 +568,28 @@ export class WorkflowRegistry {
     if (typeof productionId !== 'string' || !UUID.test(productionId)) throw new Error('productionId must be a canonical UUID');
     assertActiveProfile(modelProfile);
     const selected=this.profile(modelProfile);
+    if(catalogProfile(modelProfile)){
+      const reject=message=>{const e=new Error(message);e.status=400;throw e;};
+      if(graph!==undefined||!isRecord(official)||Object.keys(official).some(k=>!['prompt','negativePrompt','seed','width','height','steps','frames','fps'].includes(k)))reject('Catalog workflows accept only exposed settings');
+      if(typeof rationale!=='string'||!rationale.trim()||rationale.length>8000)reject('A bounded workflow rationale is required');
+      const ids=briefInputIds??[];
+      if(inputAssetIds!==undefined&&JSON.stringify(inputAssetIds)!==JSON.stringify(ids))reject('Ordered inputs differ from the brief');
+      const inputAssets=[];
+      for(const id of ids){const asset=await this.assets.binding(id,sessionId,'input');await this.assets.verifyBinding(asset,sessionId);assertInputBinding(asset);inputAssets.push(asset);}
+      const request={...official,modelProfile,mode,inputAssets};
+      const objects=await this.installed();
+      let built;try{built=buildCatalogGraph(request,{installed:objects});validateCatalogSchemas(built.graph,objects);}catch(e){reject(e.message);}
+      Object.assign(request,built.parameters);
+      const snapshot={schemaVersion:6,id:randomUUID(),productionId,createdAt:new Date().toISOString(),rationale:rationale.trim(),modelProfile,mode,inputAssetIds:ids,
+        request,graph:built.graph,output:built.output,sha256:workflowGraphHash(built.graph),validation:{kind:'static',runtimeTested:false}};
+      await beforeWrite(snapshot);
+      const directory=await safeDirectory(this.directory,true),target=path.join(directory,`${snapshot.id}.json`);
+      const temporary=path.join(directory,`${snapshot.id}.${randomUUID()}.partial`),handle=await open(temporary,'wx',0o600);
+      try{await handle.writeFile(JSON.stringify(snapshot,null,2)+'\n','utf8');await handle.sync();}finally{await handle.close();}
+      try{try{await lstat(target);throw new Error('Draft identity already exists');}catch(error){if(error.code!=='ENOENT')throw error;}await rename(temporary,target);}
+      catch(error){await unlink(temporary).catch(()=>{});throw error;}
+      return structuredClone(snapshot);
+    }
     if(QWEN21_OFFICIAL_IDS.includes(modelProfile)){
       const reject=message=>{const error=new Error(message);error.status=400;throw error;};
       if(graph!==undefined||!isRecord(official)||Object.keys(official).some(k=>!['prompt','negativePrompt','seed','width','height','steps','cfg','precision','encoder','vae','turboLora','editResolution','customSize','cacheDevice','cacheDtype'].includes(k)))reject('Official Qwen workflow accepts only bounded declarative options');
@@ -626,7 +664,15 @@ export class WorkflowRegistry {
     const stat = await lstat(filename);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_DRAFT_BYTES) throw new Error('Unsafe or oversized workflow draft');
     const snapshot = JSON.parse(await readFile(filename, 'utf8'));
-    if (snapshot.id !== id || ![1,2,3,4,5].includes(snapshot.schemaVersion) || !UUID.test(snapshot.productionId ?? '')) throw new Error('Draft identity mismatch');
+    if (snapshot.id !== id || ![1,2,3,4,5,6].includes(snapshot.schemaVersion) || !UUID.test(snapshot.productionId ?? '')) throw new Error('Draft identity mismatch');
+    if(snapshot.schemaVersion===6){
+      const {request,mode,modelProfile}=snapshot;
+      if(!catalogProfile(modelProfile)||request?.modelProfile!==modelProfile||request?.mode!==mode||
+        workflowGraphHash(snapshot.graph)!==snapshot.sha256||JSON.stringify(snapshot.inputAssetIds)!==JSON.stringify(request.inputAssets?.map(asset=>asset.id)))throw new Error('Catalog snapshot identity mismatch');
+      const checked=validateCatalogGraph(snapshot.graph,request,{installed:await this.installed()});
+      if(workflowGraphHash(checked.output)!==workflowGraphHash(snapshot.output))throw new Error('Catalog output mismatch');
+      return structuredClone(snapshot);
+    }
     if(snapshot.schemaVersion===5){
       if(!QWEN21_OFFICIAL_IDS.includes(snapshot.modelProfile)||snapshot.request?.variant!==(snapshot.modelProfile===QWEN21_PROFILES.base?'base':'turbo')||snapshot.request?.mode!==snapshot.mode||workflowGraphHash(snapshot.graph)!==snapshot.sha256||JSON.stringify(snapshot.inputAssetIds)!==JSON.stringify(snapshot.request?.inputAssets?.map(x=>x.id)))throw new Error('Official Qwen workflow identity mismatch');
       const objects=await this.installed(),checked=validateQwen21Graph(snapshot.graph,{options:snapshot.request,objects});if(workflowGraphHash(checked.output)!==workflowGraphHash(snapshot.output)||checked.negativePromptEffective!==snapshot.negativePromptEffective||checked.output.width*checked.output.height>8388608)throw new Error('Official Qwen workflow output mismatch');

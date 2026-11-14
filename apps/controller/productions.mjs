@@ -2,9 +2,9 @@ import {randomUUID} from 'node:crypto';
 import {ApiError,digest,normalizeRequest,terminalPhases} from './store.mjs';
 import {validateEnhancementSpec} from './enhancer.mjs';
 import {MODEL_PROFILES,workflowGraphHash} from './workflows.mjs';
-import {mediaIntent,assertModeProfile,assertActiveProfile,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS,UUID} from './media-modes.mjs';
+import {mediaIntent,assertModeProfile,assertActiveProfile,MOSS_OFFICIAL_IDS,QWEN21_OFFICIAL_IDS,UUID,usesPreparedWorkflow,preparedWorkflowVersions,preparedParameters,isVideoMode} from './media-modes.mjs';
 import {hasBinaryPrimaryKey,ensureCoreTables} from './schema-integrity.mjs';
-const officialInputProfile=id=>[...MOSS_OFFICIAL_IDS,...QWEN21_OFFICIAL_IDS].includes(id);
+const officialInputProfile=usesPreparedWorkflow;
 
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const definiteWorkflowRejection=Symbol('workflow-preparation-rejected-before-write');
@@ -271,7 +271,7 @@ export class ProductionStore {
       const spec=run.spec,w=spec?.workflow,req=w?.request,out=w?.output;
       let valid=false;
       try{
-        valid=production.id===id&&production.sessionId===session&&production.brief&&digest(production.brief)===production.briefHash&&row.id===run.id&&row.payload_hash===run.specHash&&digest(spec)===run.specHash&&Number.isSafeInteger(run.productionRevision)&&run.productionRevision>=1&&typeof run.cancelRequested==='boolean'&&production.latestRunId===run.id&&production.attempts.at(-1)===run.id&&production.attempts.filter(x=>x===run.id).length===1&&spec.assetSessionId===session&&spec.briefHash===production.briefHash&&spec.enhancer===false&&spec.modelProfile===production.brief.modelProfile&&[4,5].includes(w?.schemaVersion)&&officialInputProfile(w.modelProfile)&&w.productionId===id&&w.id===production.workflowId&&w.sha256===production.workflowSha256&&workflowGraphHash(w.graph)===w.sha256&&w.modelProfile===production.brief.modelProfile&&w.mode===(production.brief.mode??'t2i')&&req&&out&&spec.prompt===req.prompt&&spec.negativePrompt===(req.negativePrompt??'')&&spec.seed===(req.seed??'42')&&spec.width===out.width&&spec.height===out.height&&spec.steps===(req.steps??(w.schemaVersion===5&&req.variant==='turbo'?8:w.mode==='edit'&&w.schemaVersion!==5?30:25))&&spec.mode===(production.brief.mode??'t2i')&&spec.inputAssetId===(production.brief.inputAssetId??null)&&JSON.stringify(spec.invariants)===JSON.stringify(production.brief.invariants)&&JSON.stringify(w.inputAssetIds)===JSON.stringify(production.brief.inputAssetIds??(production.brief.inputAssetId?[production.brief.inputAssetId]:[]))&&Array.isArray(spec.referenceAssets)&&JSON.stringify(spec.referenceAssets.map(x=>x.id))===JSON.stringify(production.brief.referenceAssetIds??[]);
+        valid=production.id===id&&production.sessionId===session&&production.brief&&digest(production.brief)===production.briefHash&&row.id===run.id&&row.payload_hash===run.specHash&&digest(spec)===run.specHash&&Number.isSafeInteger(run.productionRevision)&&run.productionRevision>=1&&typeof run.cancelRequested==='boolean'&&production.latestRunId===run.id&&production.attempts.at(-1)===run.id&&production.attempts.filter(x=>x===run.id).length===1&&spec.assetSessionId===session&&spec.briefHash===production.briefHash&&spec.enhancer===false&&spec.modelProfile===production.brief.modelProfile&&preparedWorkflowVersions.includes(w?.schemaVersion)&&officialInputProfile(w.modelProfile)&&w.productionId===id&&w.id===production.workflowId&&w.sha256===production.workflowSha256&&workflowGraphHash(w.graph)===w.sha256&&w.modelProfile===production.brief.modelProfile&&w.mode===(production.brief.mode??'t2i')&&req&&out&&Object.entries(preparedParameters(w)).every(([key,value])=>spec[key]===value)&&spec.mode===(production.brief.mode??'t2i')&&spec.inputAssetId===(production.brief.inputAssetId??null)&&JSON.stringify(spec.invariants)===JSON.stringify(production.brief.invariants)&&JSON.stringify(w.inputAssetIds)===JSON.stringify(production.brief.inputAssetIds??(production.brief.inputAssetId?[production.brief.inputAssetId]:[]))&&Array.isArray(spec.referenceAssets)&&JSON.stringify(spec.referenceAssets.map(x=>x.id))===JSON.stringify(production.brief.referenceAssetIds??[]);
       }catch{valid=false;}
       if(valid){
         const rows=this.db.prepare("SELECT seq,json FROM events WHERE run_id=? AND type='render_requested' ORDER BY seq").all(id),matches=rows.filter(row=>{try{const e=JSON.parse(row.json);return e.revision===run.productionRevision&&e.runId===run.id&&e.attempt===production.attempts.length;}catch{return false;}});
@@ -632,11 +632,10 @@ export class ProductionStore {
     const current=this.get(id,session);
     const previous=typeof input.requestId==='string'?this.db.prepare('SELECT json FROM runs WHERE request_id=?').get(input.requestId):null;
     if(previous)return {...this.findPreparedRenderReceipt(id,session,input,workflow),created:false};
-    if(!officialInputProfile(current.brief.modelProfile)||![4,5].includes(workflow.schemaVersion)||workflow.productionId!==id||workflow.id!==input.workflowId||workflow.id!==current.workflowId||workflow.sha256!==current.workflowSha256||workflow.modelProfile!==current.brief.modelProfile)throw new ApiError(409,'保存済みworkflowと制作の紐付けが一致しません。');
+    if(!officialInputProfile(current.brief.modelProfile)||!preparedWorkflowVersions.includes(workflow.schemaVersion)||workflow.productionId!==id||workflow.id!==input.workflowId||workflow.id!==current.workflowId||workflow.sha256!==current.workflowSha256||workflow.modelProfile!==current.brief.modelProfile)throw new ApiError(409,'保存済みworkflowと制作の紐付けが一致しません。');
     const request=workflow.request,output=workflow.output;
     if(!request||typeof request!=='object'||!output||typeof output!=='object')throw new ApiError(409,'保存済みworkflowの生成条件を確認できません。');
-    const qwen=workflow.schemaVersion===5,mode=workflow.mode;
-    const derived={requestId:input.requestId,workflowId:input.workflowId,expectedRevision:input.expectedRevision,prompt:request.prompt,negativePrompt:request.negativePrompt??'',seed:request.seed??'42',width:output.width,height:output.height,steps:request.steps??(qwen&&request.variant==='turbo'?8:mode==='edit'&&!qwen?30:25),enhancer:false};
+    const derived={requestId:input.requestId,workflowId:input.workflowId,expectedRevision:input.expectedRevision,...preparedParameters(workflow),enhancer:false};
     let result;try{result=this.render(id,session,derived,workflow,{preparedInput:input});}catch(error){if(this.db.prepare('SELECT 1 FROM runs WHERE request_id=?').get(input.requestId))throw new ApiError(503,'生成受付の結果が不明です。再送せず照合してください。');throw error;}
     const saved=this.findPreparedRenderReceipt(id,session,input,workflow);return {...result,...saved};
   }
@@ -655,7 +654,7 @@ export class ProductionStore {
     if((workflow.mode??'t2i')!==mode||(officialInputProfile(workflow.modelProfile)?JSON.stringify(workflow.inputAssetIds)!==JSON.stringify(current.brief.inputAssetIds??(current.brief.inputAssetId?[current.brief.inputAssetId]:[])):(workflow.inputAsset?.id??null)!==(current.brief.inputAssetId??null)))throw new ApiError(409,'workflowと制作の画像入力が一致しません。');
     const referenceAssets=(current.brief.referenceAssetIds??[]).map(id=>{const asset=this.assets?.get(id,session);if(!asset||asset.purpose!=='reference')throw new ApiError(409,'参照画像を確認できません。');return {id:asset.id,purpose:asset.purpose,sha256:asset.sha256,width:asset.width,height:asset.height};});
     if(current.workflowEnhancement&&(current.workflowEnhancement.workflowId!==workflow.id||current.workflowEnhancement.workflowSha256!==workflow.sha256||current.workflowEnhancement.briefHash!==current.briefHash))throw new ApiError(409,'Selected PE adoption and workflow no longer match');
-    const spec={...normalized.spec,modelProfile:workflow.modelProfile,workflow,inputAsset:workflow.inputAsset??null,...(workflow.schemaVersion===4?{inputAssets:workflow.request.inputAssets.map(x=>x.binding)}:workflow.schemaVersion===5?{inputAssets:workflow.request.inputAssets}:{}),referenceAssets,assetSessionId:session,enhancer:input.enhancer??false,invariants:current.brief.invariants,briefHash:current.briefHash,...(current.workflowEnhancement?{[current.workflowEnhancement.family==='qwen'?'qwenPeAdoption':'mossPeAdoption']:current.workflowEnhancement}:{})};
+    const spec={...normalized.spec,modelProfile:workflow.modelProfile,workflow,inputAsset:workflow.inputAsset??null,...(workflow.schemaVersion===4?{inputAssets:workflow.request.inputAssets.map(x=>x.binding)}:[5,6].includes(workflow.schemaVersion)?{inputAssets:workflow.request.inputAssets}:{}),referenceAssets,assetSessionId:session,enhancer:input.enhancer??false,invariants:current.brief.invariants,briefHash:current.briefHash,...(current.workflowEnhancement?{[current.workflowEnhancement.family==='qwen'?'qwenPeAdoption':'mossPeAdoption']:current.workflowEnhancement}:{})};
     if(officialInputProfile(workflow.modelProfile)&&spec.enhancer)throw new ApiError(400,'公式フローのプロンプト強化は、書換え内容の記録と評価が完成するまで利用できません。');
     if(spec.enhancer&&mode!=='t2i')throw new ApiError(400,'プロンプト補助は現在t2iだけで使用できます。');
     if(spec.enhancer) {
@@ -706,7 +705,7 @@ export class ProductionStore {
       if(!run||run.productionId!==id||p.latestRunId!==run.id||!terminalPhases.has(run.phase)) throw new ApiError(409,'評価対象の生成が完了していません。');
       if(p.evaluations.some(e=>e.runId===run.id)) throw new ApiError(409,'この生成の評価は記録済みです。');
       if(run.specHash!==input.specHash||!run.artifacts.some(a=>a.sha256===input.artifactSha256)) throw new ApiError(409,'評価対象の画像・生成条件が一致しません。');
-      if(run.spec.mode==='video'){
+      if(isVideoMode(run.spec.mode)){
         const primary=run.artifacts.find(a=>a.mime==='video/mp4'),frames=run.artifacts.filter(a=>a.role==='evaluation_frame').map(a=>a.sha256).sort();
         if(!primary||primary.sha256!==input.artifactSha256||frames.length!==3||!Array.isArray(input.evaluationFrameSha256s)||digest([...input.evaluationFrameSha256s].sort())!==digest(frames))throw new ApiError(409,'動画本体と全評価フレームを確認してから評価してください。');
       }
@@ -726,11 +725,11 @@ export class ProductionStore {
       if(input.decision==='complete'&&criteria.some(c=>c.status!=='met')) throw new ApiError(400,'未達または未確認の条件があるため完成にはできません。');
       // The current media delivery exposes only three stills to the reviewer.
       // A claim of full temporal review is not proof of actual video access.
-      if(run.spec.mode==='video'&&input.decision==='complete')throw new ApiError(400,'動画は抜粋3フレームのみ評価可能です。全編の時間的品質は未確認のため完成にはできません。');
+      if(isVideoMode(run.spec.mode)&&input.decision==='complete')throw new ApiError(400,'動画は抜粋3フレームのみ評価可能です。全編の時間的品質は未確認のため完成にはできません。');
       const nextChange=input.decision==='revise'?text(input.nextChange,3000,'次回の具体的変更'):String(input.nextChange??'').slice(0,3000);
       const strengths=input.strengths===undefined?[]:textList(input.strengths,'保持すべき長所');
       if(input.bestRunId!==undefined)this.assertBestCandidate(p,input.bestRunId,run.id);
-      const evaluation={id:randomUUID(),productionId:id,runId:run.id,briefHash:p.briefHash,specHash:run.specHash,artifactSha256:input.artifactSha256,...(run.spec.mode==='video'?{evaluationFrameSha256s:input.evaluationFrameSha256s,videoCoverage:{kind:'sampled_frames',frameSha256s:input.evaluationFrameSha256s,unverified:['continuous motion','temporal consistency','flicker','camera movement across the complete video']}}:{}),criteria,strengths,decision:input.decision,nextChange,at:new Date().toISOString()};
+      const evaluation={id:randomUUID(),productionId:id,runId:run.id,briefHash:p.briefHash,specHash:run.specHash,artifactSha256:input.artifactSha256,...(isVideoMode(run.spec.mode)?{evaluationFrameSha256s:input.evaluationFrameSha256s,videoCoverage:{kind:'sampled_frames',frameSha256s:input.evaluationFrameSha256s,unverified:['continuous motion','temporal consistency','flicker','camera movement across the complete video']}}:{}),criteria,strengths,decision:input.decision,nextChange,at:new Date().toISOString()};
       this.db.prepare('INSERT INTO evaluations VALUES(?,?,?,?)').run(evaluation.id,id,run.id,JSON.stringify(evaluation));
       if(input.bestRunId!==undefined)p.bestRunId=input.bestRunId;
       p.evaluations.push(evaluation);p.revision++;p.phase=input.decision==='complete'?'completed':input.decision==='revise'?'revising':'needs_user';

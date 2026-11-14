@@ -1,3 +1,5 @@
+import {CATALOG_PROFILES,catalogProfile,catalogLimits,videoCatalogMode} from './catalog-profiles.mjs';
+
 export const UPSCALE_PROFILE='realesrgan-x4plus-v1';
 export const RESIZE_PROFILE='image-scale-v1';
 export const VIDEO_PROFILE_ID='wan22-ti2v-5b-v1';
@@ -20,6 +22,7 @@ export const MODEL_PROFILES=Object.freeze({
   [RESIZE_PROFILE]: {label:'ImageScale (standard resize, no AI model)',qualification:'standard-node-resize'},
   [VIDEO_PROFILE_ID]: {label:'Retired video profile',qualification:'historical-read-only'},
   [H3_PROFILE_ID]: {label:'Retired video profile',qualification:'historical-read-only'},
+  ...Object.fromEntries(Object.entries(CATALOG_PROFILES).map(([id,{label}])=>[id,{label,qualification:'fixed-catalog-template'}])),
 });
 export const activeModelProfiles=Object.freeze(Object.keys(MODEL_PROFILES).filter(id=>!RETIRED_VIDEO_PROFILES.includes(id)));
 export function assertActiveProfile(modelProfile) {
@@ -32,7 +35,16 @@ export function assertActiveProfile(modelProfile) {
 // native TextEncodeQwenImage21 schema exposes up to 16; 11–16 are an explicit
 // Controller-built node extension, subject to live schema and resource checks.
 export const QWEN21_MAX_INPUTS=16;
-export const MEDIA_MODES=Object.freeze(['t2i','i2i','edit','background-removal','layout','depth','upscale','video']);
+export const MEDIA_MODES=Object.freeze(['t2i','i2i','edit','background-removal','layout','depth','upscale','video','pose','mixed-controlnet','t2v','i2v']);
+export const isVideoMode=mode=>mode==='video'||videoCatalogMode(mode);
+export const usesPreparedWorkflow=id=>Boolean(catalogProfile(id))||MOSS_OFFICIAL_IDS.includes(id)||QWEN21_OFFICIAL_IDS.includes(id);
+export const preparedWorkflowVersions=Object.freeze([4,5,6]);
+export function preparedParameters(workflow) {
+  const request=workflow.request, output=workflow.output, qwen=workflow.schemaVersion===5;
+  return {prompt:request.prompt,negativePrompt:request.negativePrompt??'',seed:request.seed??'42',
+    width:output.width,height:output.height,steps:request.steps??(qwen&&request.variant==='turbo'?8:workflow.mode==='edit'&&!qwen?30:25),
+    ...(videoCatalogMode(workflow.mode)?{frames:output.frames,fps:output.fps}:{})};
+}
 export const WORKFLOW_QUERY_LIMIT = 80;
 export const workflowLibraryId = /^[a-z0-9-]{1,64}$/;
 export const workflowLibraryFile = /^Media Studio\/[A-Za-z0-9][\w .-]*\/[\w-]+\.json$/;
@@ -43,15 +55,20 @@ export function mediaIntent(input={},defaultMode='t2i') {
   if(!MEDIA_MODES.includes(mode)||!Array.isArray(referenceAssetIds)||referenceAssetIds.length>8||referenceAssetIds.some(id=>!UUID.test(id))||new Set(referenceAssetIds).size!==referenceAssetIds.length)fail('制作モードまたは参照画像IDが不正です。');
   if(inputAssetId!==null&&!UUID.test(inputAssetId))fail('入力画像IDが不正です。');
   const moss=MOSS_OFFICIAL_IDS.includes(input.modelProfile),qwen=QWEN21_OFFICIAL_IDS.includes(input.modelProfile),ids=input.inputAssetIds;
-  if(ids!==undefined&&(!(moss||qwen)||!Array.isArray(ids)||ids.length>(qwen?QWEN21_MAX_INPUTS:6)||ids.some(id=>!UUID.test(id))||new Set(ids).size!==ids.length))fail('生成入力画像の順序付きIDが不正です。');
+  const fixed=catalogProfile(input.modelProfile);
+  if(ids!==undefined&&(!(moss||qwen||fixed)||!Array.isArray(ids)||ids.length>(fixed?fixed.inputs:qwen?QWEN21_MAX_INPUTS:6)||ids.some(id=>!UUID.test(id))||new Set(ids).size!==ids.length))fail('生成入力画像の順序付きIDが不正です。');
   if(ids!==undefined&&inputAssetId!==null&&ids[0]!==inputAssetId)fail('単一入力と順序付き入力が一致しません。');
   const inputIds=ids??(inputAssetId?[inputAssetId]:[]);
+  if(fixed){const range=catalogLimits(input.modelProfile);if(inputIds.length<range.minGeneratorInputs||inputIds.length>range.maxGeneratorInputs)fail('指定ワークフローの入力画像の枚数が一致しません。');}
   if(['i2i','edit','background-removal','upscale','depth'].includes(mode)&&inputIds.length===0)fail('この制作モードにはinput用途の画像が必要です。');
   if(mode==='t2i'&&inputIds.length&&!moss)fail('t2iでは画像をlatentへ入力しません。参照用途を使用するかi2iを選択してください。');
   if(referenceAssetIds.some(id=>inputIds.includes(id)))fail('同じ登録画像を入力と参照の両方に指定できません。用途を明示して別登録してください。');
   return {mode,inputAssetId,referenceAssetIds:[...referenceAssetIds],...(ids!==undefined?{inputAssetIds:[...ids]}:{})};
 }
 export function assertModeProfile(mode,modelProfile) {
+  const fixed=catalogProfile(modelProfile);
+  if(fixed){if(mode!==fixed.mode)fail('指定ワークフローと制作モードが一致しません。');return;}
+  if(['pose','mixed-controlnet','t2v','i2v'].includes(mode))fail('このモードには対応するカタログプロファイルが必要です。');
   if(mode==='upscale'&&![UPSCALE_PROFILE,RESIZE_PROFILE].includes(modelProfile))fail('拡大はAIアップスケールまたは通常リサイズのモデルプロファイルを指定してください。');
   if(mode==='video'&&![VIDEO_PROFILE_ID,H3_PROFILE_ID].includes(modelProfile))fail('動画に対応したモデルプロファイルが必要です。');
   if(['i2i','edit'].includes(mode)&&modelProfile!=='moss-image-sft-int8-v1'&&!(mode==='edit'&&[...MOSS_OFFICIAL_IDS,...QWEN21_OFFICIAL_IDS].includes(modelProfile)))fail('画像入力・編集は対応する画像プロファイルを指定してください。');

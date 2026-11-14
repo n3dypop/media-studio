@@ -88,6 +88,12 @@ test('DSH library tool forwards a video operation as a read-only query', async t
     fetch: async (url, options) => {
       const parsed = new URL(url);
       seen.push([options.method, parsed.pathname, parsed.searchParams.get('mode'), parsed.searchParams.get('id')]);
+      if (parsed.pathname === '/api/workflow-library/selection' && /Qwen/i.test(JSON.parse(options.body).reference)) {
+        return Response.json({total:0,workflows:[]});
+      }
+      if (parsed.pathname === '/api/workflow-catalog') {
+        return Response.json({capabilities:[{modelProfile:'qwen-image-2.1-turbo-v1',mode:'edit'}]});
+      }
       return Response.json(response);
     },
   });
@@ -133,6 +139,20 @@ test('DSH library tool forwards a video operation as a read-only query', async t
   assert.equal(blocked.status, 'workflow_unavailable_in_dsh');
   assert.equal(blocked.workflow.id, 'video');
   assert.deepEqual(seen.filter(([method]) => method === 'POST'), [['POST', '/api/workflow-library/selection', null, null]]);
+  const label = 'Qwen-Image 2.1 Turbo で編集';
+  const call = {type:'tool/call',seq:20,data:{callId:'choice',name:'ask_user_question',turn:1,step:4,
+    arguments:JSON.stringify({questions:[{id:'model_choice',options:[{label},{label:'生成しない'}]}]})}};
+  const answer = selected => ({type:'tool/result',seq:21,sourceEventSeqs:[20],data:{turn:1,step:4,
+    message:{role:'tool',source:{kind:'tool',callId:'choice'},toolCallId:'choice',isError:false,
+      content:[{type:'text',text:JSON.stringify({answers:[{id:'model_choice',selected:[selected]}]})}]}}});
+  events.push(call, answer(label));
+  const mismatch = await create.execute({request:'Recolor a cup',modelProfile:'moss-image-sft-official-v1',mode:'edit'},exec);
+  assert.equal(mismatch.status,'workflow_selection_mismatch');
+  assert.equal(mismatch.workflow.dshProfile,'qwen-image-2.1-turbo-v1');
+  events[events.length-1] = answer('生成しない');
+  assert.equal((await create.execute({request:'Recolor a cup',modelProfile:'qwen-image-2.1-turbo-v1',mode:'edit'},exec)).status,'generation_declined');
+  events[events.length-1] = answer('Qwen-Image 2.1 Base で編集'); // option never offered
+  assert.equal((await create.execute({request:'Recolor a cup',modelProfile:'qwen-image-2.1-turbo-v1',mode:'edit'},exec)).status,'workflow_unavailable_in_dsh');
 });
 
 test('a MiniMax H3 edit lookup reports the saved template inputs and defaults', async t => {

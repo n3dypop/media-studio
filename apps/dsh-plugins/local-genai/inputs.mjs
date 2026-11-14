@@ -16,6 +16,44 @@ export function currentUserRequest(session) {
   return text && text.length <= 8000 ? text : null;
 }
 
+// DSH records a question reply as an owned tool result within the original
+// turn. Bind the answer to the actual question and its displayed options.
+export function currentUserChoices(session) {
+  const events = session?.snapshotEvents?.();
+  if (!Array.isArray(events)) return [];
+  const start = events.findLastIndex(event => event.type === 'turn/start');
+  if (start < 0) return [];
+  const calls = new Map(), choices = [];
+  for (const event of events.slice(start + 1)) {
+    const data = event.data, message = data?.message;
+    if (event.type === 'tool/call' && data?.name === 'ask_user_question') {
+      calls.set(data.callId, event);
+    } else if (event.type === 'tool/result' && message?.isError === false && message.role === 'tool' &&
+        message.source?.kind === 'tool' && message.source.callId === message.toolCallId) {
+      const call = calls.get(message.toolCallId);
+      if (!call || event.sourceEventSeqs?.length !== 1 || event.sourceEventSeqs[0] !== call.seq ||
+          data.turn !== call.data.turn || data.step !== call.data.step || message.content?.length !== 1 ||
+          message.content[0]?.type !== 'text') continue;
+      try {
+        const args = typeof call.data.arguments === 'string' ? JSON.parse(call.data.arguments) : call.data.arguments;
+        const result = JSON.parse(message.content[0].text);
+        if (!Array.isArray(result.answers) || !Array.isArray(args?.questions)) continue;
+        for (const answer of result.answers) {
+          const questions = args.questions.filter(question => question.id === answer.id);
+          if (questions.length !== 1 || !Array.isArray(answer.selected)) continue;
+          const labels = (questions[0].options ?? []).map(option => option.label);
+          if (answer.selected.length === 1 && answer.custom === undefined && labels.includes(answer.selected[0])) {
+            choices.push({ text: answer.selected[0], fromOption: true });
+          } else if (answer.selected.length === 0 && typeof answer.custom === 'string' && answer.custom.trim()) {
+            choices.push({ text: answer.custom.trim(), fromOption: false });
+          }
+        }
+      } catch { /* An incomplete or malformed result does not select an option. */ }
+    }
+  }
+  return choices.reverse();
+}
+
 // A single explicit PNG size can be enforced without guessing which of
 // several dimensions or formats the user intends to generate.
 export function requestedPngSize(request) {
