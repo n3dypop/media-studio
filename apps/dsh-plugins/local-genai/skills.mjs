@@ -6,7 +6,7 @@ export const name = 'media-studio-skills';
 export const inject = ['skills'];
 export const PLAYBOOKS = Object.freeze({
   'generation-plan': 'Turn a user request and admitted materials into a production specification, stages and observable acceptance criteria.',
-  'comfyui-workflow-build': 'Select or develop a permitted ComfyUI workflow and distinguish static validation from generation.',
+  'comfyui-workflow-build': 'Prepare an approved ComfyUI template, validate its settings, or hand off a missing capability.',
   'comfyui-generate': 'Execute a validated workflow once through the managed controller and recover its actual saved media.',
   'output-review': 'Review actual image or video output against saved criteria, distinguishing met, unmet and unverified.',
   'generation-iterate': 'Plan a justified change from the review, preserve strengths and compare attempts without a blind seed loop.',

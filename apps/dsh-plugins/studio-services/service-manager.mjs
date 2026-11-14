@@ -48,9 +48,12 @@ export function servicePlan(service,action,snapshot){
   if(action==='start'&&target.state==='running'||action==='stop'&&target.state==='stopped')return [];
   const steps=[];
   const add=(id,verb)=>{if(verb==='start'&&steps.findLast(step=>step.service===id)?.action==='start')return;steps.push({service:id,action:verb,label:`${id}: ${verb==='start'?'起動':'停止'}`,state:'pending'});};
+  const ensureStarted=id=>{
+    if(byId.get(id)?.state!=='running'||steps.some(step=>step.service===id&&step.action==='stop'))add(id,'start');
+  };
   const startController=()=>{
-    add('ComfyUI','start');
-    if(snapshot.strataEnabled)add('Strata','start');
+    ensureStarted('ComfyUI');
+    if(snapshot.strataEnabled)ensureStarted('Strata');
     if(snapshot.searchEnabled)add('RustXNG','start');
     add('Controller','start');
   };

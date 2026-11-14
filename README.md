@@ -17,7 +17,7 @@ Media Studio includes six integration plugins:
 | `local-genai` | Agent tools, catalog, Skills and the Strata/Controller gateway. |
 | `media-results` | Verified generation results and saved media delivery. |
 | `studio-controls` | Explicit search approvals and production decisions. |
-| `studio-monitor` | Media & Resources pane with production and resource state. |
+| `studio-monitor` | Media & Resources and Catalog for production state, Strata, and workflow discovery. |
 | `studio-preset` | One current media-studio preset, with legacy compatibility. |
 | `studio-services` | Managed service lifecycle, resource release and launch paths. |
 
