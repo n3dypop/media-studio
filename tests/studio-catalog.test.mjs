@@ -234,5 +234,7 @@ test('workflow prompts retain the exact managed profile and hand off standalone 
   const standalone = { family: 'ControlNet', label: 'Pose', file: 'ControlNet/pose.json' };
   assert.match(workflowPrompt(standalone, true), /ComfyUI単体.*ControlNet\/pose\.json.*実行手順/);
   assert.match(workflowPrompt(standalone, false), /^Explain the required inputs.*standalone ComfyUI/);
+  assert.match(workflowPrompt({ ...standalone, id: 'controlnet-pose' }, true), /controlnet-pose.*実行手順/);
+  assert.match(workflowPrompt({ ...standalone, id: 'controlnet-pose' }, false), /standalone ComfyUI.*workflow ID: controlnet-pose/);
   assert.match(workflowPrompt({ ...standalone, unavailableDshProfile: 'sd15-pose-v1', mode: 'pose' }, true), /sd15-pose-v1.*pose.*保守作業/);
 });

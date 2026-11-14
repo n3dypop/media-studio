@@ -307,8 +307,8 @@ window.__ModuleLoader__.load({
           : `Check why profile ${row.unavailableDshProfile} and operation ${row.mode} are unavailable in DSH for “${name}”, and describe the maintenance needed.`;
       }
       return ja
-        ? `ComfyUI単体のワークフロー「${name}」（${row.file}）について、必要な入力素材・依存関係と実行手順を教えてください。`
-        : `Explain the required inputs, dependencies and steps for the standalone ComfyUI workflow “${name}” (${row.file}).`;
+        ? `ComfyUI単体のワークフロー「${name}」（${row.id ? `ワークフローID: ${row.id}` : row.file}）の入力素材・依存関係と実行手順を教えてください。`
+        : `Explain the required inputs, dependencies and steps for the standalone ComfyUI workflow “${name}” (${row.id ? `workflow ID: ${row.id}` : row.file}).`;
     }
     function WorkflowRow({row,t,operation,onSelect}){
       const [feedback,setFeedback]=useState('');

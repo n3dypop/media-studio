@@ -33,6 +33,8 @@ export function assertActiveProfile(modelProfile) {
 // Controller-built node extension, subject to live schema and resource checks.
 export const QWEN21_MAX_INPUTS=16;
 export const MEDIA_MODES=Object.freeze(['t2i','i2i','edit','background-removal','layout','depth','upscale','video']);
+export const WORKFLOW_QUERY_LIMIT = 80;
+export const workflowLibraryId = /^[a-z0-9-]{1,64}$/;
 export const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const fail=message=>{const error=new Error(message);error.status=400;throw error;};
 export function mediaIntent(input={},defaultMode='t2i') {

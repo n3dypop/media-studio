@@ -12,7 +12,7 @@ import {deliveryPosition, singleVisibleImageDelivery, visibleDelivery} from './e
 import {createRuntimeConfig,runtimeRootOf} from '../shared/plugin-config.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
 import {createDurableRuntime} from './durable-runtime.mjs';
-import { MOSS_OFFICIAL_IDS, QWEN21_OFFICIAL_IDS, MODEL_PROFILES as KNOWN_PROFILES,
+import { MOSS_OFFICIAL_IDS, QWEN21_OFFICIAL_IDS, WORKFLOW_QUERY_LIMIT, workflowLibraryId, MODEL_PROFILES as KNOWN_PROFILES,
   activeModelProfiles as MODEL_PROFILES, MEDIA_MODES as MODES } from '../../controller/media-modes.mjs';
 
 export const name = 'local-genai';
@@ -514,7 +514,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     requireRequestedSize(result.production, args.official);
   }
 
-  function register(toolName, description, parameters, execute) {
+  function register(toolName, description, parameters, execute, activation) {
     if (!allowedTools.has(toolName)) return;
     const definition = defineTool({
       name: toolName, description, parameters,
@@ -549,7 +549,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
         } finally { running.delete(promise); }
       },
     });
-    definitions.push(definition); ctx.tools.register(definition);
+    definitions.push(definition); ctx.tools.register(definition,activation);
   }
 
   register('local_input_images', 'List actual user images admitted in this conversation, with opaque attachment ids and import limits. Does not read arbitrary paths or generate.', {},
@@ -636,21 +636,49 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     const catalog = { ...Object.fromEntries(['modelProfile', 'requestedProfile', 'requestedProfileStatus', 'mode', 'capabilities', 'coreModelLedger', 'templateStatus'].filter(key => result[key] !== undefined).map(key => [key, result[key]])), modelProfiles: result.modelProfiles, models: result.models, templates: result.templates, nodeSchemas: result.nodeSchemas, limits: result.limits, validationScope: result.validationScope };
     return workflowCatalogForAgent(catalog, role, args);
   });
-  register('local_workflow_library', 'Find standalone ComfyUI templates and dependencies. dshProfile identifies a managed equivalent; unavailableDshProfile needs maintenance.', {
-    query: { type: 'string', description: 'Family, profile ID, model file or keyword.' },
+  const libraryLookupAvailable = ({ agent }) => {
+    const events = agent?.session?.snapshotEvents?.() ?? [];
+    const start = events.findLastIndex(event => event.type === 'turn/start');
+    if (start < 0) return true;
+    const current = events.slice(start + 1);
+    if (current.some(event => event.type === 'turn/end')) return true;
+    // This bounds catalog discovery within the current user turn. It does not
+    // affect later turns, generation, or other tools.
+    return current.filter(event => event.type === 'tool/call' && event.data?.name === 'local_workflow_library').length < 4;
+  };
+  register('local_workflow_library', 'Read standalone ComfyUI workflows. Use the exact id for inputs, dependencies and steps available in the saved template. Use a short name only to discover an id. Once found, answer from the returned evidence.', {
+    id: { type: 'string', description: 'Exact workflow library ID. Use instead of query for details.' },
+    query: { type: 'string', description: `Name or filename only, at most ${WORKFLOW_QUERY_LIMIT} characters. Do not add instructions or dependency terms.` },
     operation: { type: 'string', description: 'Template operation such as t2i, edit, t2v or i2v.' },
     media: { type: 'string', enum: ['image', 'video'] },
     page: { type: 'integer', description: 'Result page starting at 1.' },
     includeResources: { type: 'boolean', description: 'Omit for a normal lookup. Set true only for requested disk or memory figures.' },
   }, async (args, exec) => {
-    const keys = ['query', 'media', 'page'];
+    const workflowId = args.id?.trim();
+    const search = args.query?.trim();
+    if (args.id !== undefined && (!workflowLibraryId.test(workflowId) || args.query !== undefined || (args.page ?? 1) !== 1)) {
+      return { status: 'invalid_filter', next: 'Use only the exact library id for details, without query or pagination.' };
+    }
+    if (args.query !== undefined && (!search || search.length > WORKFLOW_QUERY_LIMIT)) {
+      return { status: 'invalid_filter', next: `Use a workflow id or one short name (up to ${WORKFLOW_QUERY_LIMIT} characters). Request the details by id after finding a match.` };
+    }
+    const keys = ['media', 'page'];
     const query = new URLSearchParams(Object.fromEntries(keys.filter(key => args[key] !== undefined).map(key => [key, args[key]])));
-    if (args.operation !== undefined) query.set('mode', args.operation);
+    if (workflowId) query.set('id',workflowId);
+    if (search) query.set('query',search);
+    if (args.operation !== undefined) {
+      if (!/^[a-z0-9-]{1,24}$/.test(args.operation)) return { status: 'invalid_filter', next: 'Use a single operation such as edit or omit the filter.' };
+      query.set('mode', args.operation);
+    }
     const result = await request('/api/workflow-library?' + query, { sessionId: sessionIdentity(exec), signal: exec.signal });
+    if (workflowId) result.next = result.workflows.length
+      ? 'Use these details to answer now. Report unavailable facts as unverified. Do not repeat this lookup or execute a workflow for an explanation request.'
+      : 'No matching workflow ID was found. Check the ID or report that it could not be verified.';
+    else if (!result.workflows.length) result.next = 'No matches. If useful, retry once with just the workflow name, then report the gap.';
     if (args.includeResources === true) return result;
     const { operations, workflows, ...page } = result;
     return { ...page, workflows: workflows.map(({ resourceUsage, ...row }) => row) };
-  });
+  }, { when: libraryLookupAvailable });
   register('local_workflow_draft', 'Validate and save a ComfyUI API graph when the request requires a permitted graph change beyond an approved template. For prompt, canvas, seed or steps with an approved legacy template, call local_image_prepare and set parameters at render. Preserve the brief and invariants.', {
     productionId: productionParameter, expectedRevision: revisionParameter,
     graph: { ...objectSchema, required: true, description: 'ComfyUI API-format node graph, not the UI workflow export.' },

@@ -28,8 +28,9 @@ are in the conversation header, or above the composer in a new conversation.
 The workflow list supports keyword, media and operation filters.
 **Add to prompt** appends a request to the current draft and keeps its attachments.
 Managed workflows insert the exact profile and operation. Standalone entries insert
-a request for ComfyUI inputs and instructions. Unavailable DSH mappings insert a
-maintenance request. Send the draft when it is ready.
+the registered workflow ID and a request for local inputs, dependencies and ComfyUI
+instructions. Looking up the ID inspects the saved template without queuing a job.
+Unavailable DSH mappings insert a maintenance request. Send the draft when it is ready.
 The Strata section shows the model specified in startup settings and the model
 currently loaded by Strata. An active server can show **Not loaded**. The settings
 warning appears when verified settings differ from those used at startup.

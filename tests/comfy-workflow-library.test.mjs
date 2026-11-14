@@ -53,6 +53,11 @@ test('ComfyUI library filters and pages templates without promoting them to mana
   assert.equal(byProfile.workflows[0].unavailableDshProfile, 'moss-profile');
   assert.equal(byProfile.workflows[0].dshProfile, undefined);
   assert.equal(byProfile.workflows[0].state, 'static-ready');
+  const exact = await comfyWorkflowLibrary({ ...options, id: video.id });
+  assert.equal(exact.total, 1);
+  assert.deepEqual(exact.workflows[0].details, { inputs: [], outputs: ['SaveVideo'], nodeTypes: ['UNETLoader', 'SaveVideo'], models: [model] });
+  assert.equal((await comfyWorkflowLibrary({ ...options, query: 'FastH3/t2v.json' })).total, 1);
+  await assert.rejects(comfyWorkflowLibrary({ ...options, id: '../t2v' }), { status: 400 });
   await assert.rejects(comfyWorkflowLibrary({ ...options, limit: 26 }), { status: 400 });
 });
 
@@ -61,9 +66,10 @@ test('DSH library tool forwards a video operation as a read-only query', async t
   await mkdir(path.join(runtimeRoot, 'data'));
   const response = { workflows: [{ id: 'video', resourceUsage: { modelDiskBytes: 10, runtime: null } }], total: 1 };
   const seen = [];
+  const registrations = new Map();
   const ctx = {
     sessions: {}, sessionPersistence: {}, agents: { get() {} },
-    tools: { register() {}, presentAs() {}, guard() {} },
+    tools: { register(definition, activation) { registrations.set(definition.name, activation); }, presentAs() {}, guard() {} },
     on: () => () => {}, effect: fn => fn(),
     systemPrompt: { section() {}, getSectionOrder() {}, suppressRuntimeContext() {} },
   };
@@ -71,7 +77,8 @@ test('DSH library tool forwards a video operation as a read-only query', async t
     scopeOf: () => ctx, scopeChainOf: () => [ctx], defineTool: definition => definition,
     loadConfiguration: async () => ({ controllerUrl: 'http://localhost', token: 'fixture' }),
     fetch: async (url, options) => {
-      seen.push([options.method, new URL(url).pathname, new URL(url).searchParams.get('mode')]);
+      const parsed = new URL(url);
+      seen.push([options.method, parsed.pathname, parsed.searchParams.get('mode'), parsed.searchParams.get('id')]);
       return Response.json(response);
     },
   });
@@ -83,7 +90,48 @@ test('DSH library tool forwards a video operation as a read-only query', async t
   assert.deepEqual(result, { workflows: [{ id: 'video' }], total: 1 });
   assert.deepEqual(await tool.execute({ operation: 't2v', media: 'video', includeResources: true },
     { agent: { session: { id: 'fixture' } }, callId: 'catalog-resources', signal: new AbortController().signal }), response);
-  assert.deepEqual(seen, [['GET', '/api/workflow-library', 't2v'], ['GET', '/api/workflow-library', 't2v']]);
+  const exec = { agent: { session: { id: 'fixture' } }, callId: 'workflow-details', signal: new AbortController().signal };
+  assert.equal((await tool.execute({ id: 'video' }, exec)).workflows[0].id, 'video');
+  assert.equal((await tool.execute({ query: 'MiniMax H3 Image edit dependencies custom nodes model files required inputs execution steps' }, exec)).status, 'invalid_filter');
+  assert.deepEqual(seen, [['GET', '/api/workflow-library', 't2v', null], ['GET', '/api/workflow-library', 't2v', null], ['GET', '/api/workflow-library', null, 'video']]);
+  const { when } = registrations.get('local_workflow_library');
+  const events = [{ type: 'turn/start' }, ...Array.from({ length: 4 }, () => ({ type: 'tool/call', data: { name: 'local_workflow_library' } }))];
+  exec.agent.session.snapshotEvents = () => events;
+  assert.equal(when(exec), false);
+  events.push({ type: 'turn/end' }, { type: 'turn/start' });
+  assert.equal(when(exec), true);
+});
+
+test('a MiniMax H3 edit lookup reports the saved template inputs and defaults', async t => {
+  const userDirectory = await mkdtemp(path.join(tmpdir(), 'media-studio-h3-edit-library-'));
+  t.after(() => rm(userDirectory, { recursive: true, force: true }));
+  const entry = { id: 'minimax-h3-image-edit', family: 'MiniMax H3 Image', label: 'Image Edit',
+    mode: 'edit', media: 'image', file: 'Media Studio/MiniMax H3 Image/edit.json', models: [] };
+  const graphPath = path.join(userDirectory, 'default/workflows', entry.file);
+  await mkdir(path.dirname(graphPath), { recursive: true });
+  await mkdir(path.join(userDirectory, 'media-studio'));
+  const nodes = [
+    { type: 'LoadImage' },
+    { type: 'PrimitiveStringMultiline', title: 'Text (user_prompt)', widgets_values: ['Example prompt'] },
+    { type: 'PrimitiveBoolean', title: 'Boolean (Enable PE?)', widgets_values: [false] },
+    { type: 'MiniMaxH3ImageConditioning' },
+    { type: 'ResizeImageMaskNode', widgets_values: ['scale total pixels', 4] },
+    { type: 'KSampler', widgets_values: [0, 'fixed', 6, 1, 'euler', 'simple', 1] },
+    { type: 'SaveImage' },
+  ];
+  await writeFile(graphPath, JSON.stringify({ nodes }));
+  await writeFile(path.join(userDirectory, 'media-studio/workflow-catalog.json'), JSON.stringify({ version: 1, workflows: [entry] }));
+  const [row] = (await comfyWorkflowLibrary({ userDirectory, id: entry.id,
+    installed: async () => Object.fromEntries(nodes.map(({ type }) => [type, {}])) })).workflows;
+  assert.equal(row.state, 'static-ready');
+  assert.equal(row.dshProfile, undefined);
+  assert.deepEqual(row.details.inputs, ['LoadImage']);
+  assert.deepEqual(row.details.outputs, ['SaveImage']);
+  assert.equal(row.details.promptEnhancerEnabled, false);
+  assert.equal(row.details.inputMegapixels, 4);
+  assert.deepEqual(row.details.sampler, { steps: 6, cfg: 1, sampler: 'euler', scheduler: 'simple', denoise: 1 });
+  assert.match(row.details.steps[1], /user_prompt/);
+  assert.doesNotMatch(JSON.stringify(row), /Example prompt/);
 });
 
 test('ControlNet library entries resolve nested checkpoint and adapter names', async t => {
