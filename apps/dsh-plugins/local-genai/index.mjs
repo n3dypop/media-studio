@@ -557,12 +557,32 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       guidance:'Ask which named workflow to use before creating a production. No production was created.' };
     const [selected] = result.workflows;
     if (selected && !selected.dshProfile) return { status:'workflow_unavailable_in_dsh', workflow:selected,
-      guidance:'Explain the standalone ComfyUI status and maintenance handoff. No production was created. A direct user instruction or a confirmed answer to a model choice can select an alternative.' };
+      guidance:'Explain the standalone ComfyUI status and any recommendation warning before providing a maintenance handoff or execution instructions. No production was created. A direct user instruction or a confirmed answer to a model choice can select an alternative.' };
     if (selected && ((args.modelProfile && args.modelProfile !== selected.dshProfile) || mode !== selected.mode)) {
       return { status:'workflow_selection_mismatch', workflow:selected,
         guidance:'Use the selected workflow’s model profile and operation. No production was created.' };
     }
     return selected ? { modelProfile:selected.dshProfile } : null;
+  }
+
+  async function renderProduction(args, exec) {
+    return request(`/api/productions/${encodeURIComponent(args.productionId)}?includeWorkflowAdvisories=1`, {
+      sessionId:sessionIdentity(exec), signal:exec.signal,
+    });
+  }
+
+  function renderAdvisory(saved, args, exec) {
+    const warnings = (saved.workflowAdvisories ?? []).slice(0, 5);
+    if (!warnings.length) return null;
+    const settings = Object.entries(args).sort(([a], [b]) => a.localeCompare(b));
+    const identity = createHash('sha256').update(JSON.stringify([settings, warnings])).digest('hex').slice(0, 24);
+    const questionId = `workflow_risk_${identity}`;
+    const [choice] = currentUserChoices(exec.agent.session, questionId);
+    const proceed = ['実行する', 'Run anyway'];
+    if (choice?.fromOption && proceed.includes(choice.text)) return null;
+    if (choice) return {status:'generation_declined', guidance:'The user did not approve this warned execution. No GPU job was submitted.'};
+    return {status:'workflow_warning', warnings, questionId, continueLabels:proceed, cancelLabels:['中止する','Cancel'],
+      guidance:'No GPU job was submitted. In the user’s language, communicate the listed reasons and possible consequences in ask_user_question using this exact questionId and the matching continue/cancel labels. Only call render again with the exact same settings if the user selects continue. Normal Controller admission still applies.'};
   }
 
   async function checkOfficialPreparation(args, exec, tool) {
@@ -724,7 +744,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       event.data.source.summary === 'catalog-answer-ready')) return false;
     return current.filter(event => event.type === 'tool/call' && event.data?.name === 'local_workflow_library').length < 4;
   };
-  register('local_workflow_library', 'Read standalone ComfyUI workflows. Use the exact id for inputs, dependencies and steps available in the saved template. Use a short name only to discover an id. Once found, answer from the returned evidence.', {
+  register('local_workflow_library', 'Read ComfyUI workflows and any execution warnings. Use the exact id for inputs, dependencies and steps available in the saved template. Use a short name only to discover an id. Once found, answer from the returned evidence.', {
     id: { type: 'string', description: 'Exact workflow library ID or saved catalog path shown in the user request. Use instead of query for details.' },
     query: { type: 'string', description: `Name or filename only, at most ${WORKFLOW_QUERY_LIMIT} characters. Do not add instructions or dependency terms.` },
     operation: { type: 'string', description: 'Template operation such as t2i, edit, t2v or i2v.' },
@@ -757,7 +777,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     const result = await request('/api/workflow-library?' + query, { sessionId: sessionIdentity(exec), signal: exec.signal });
     const row = result.workflows.length === 1 ? result.workflows[0] : null;
     if (workflowId || row?.details) result.next = result.workflows.length
-      ? 'Answer now for this workflow only. Explain static status and requested details. Treat resize targets as settings, and listed weights as template dependencies. No further lookup is needed.'
+      ? 'Answer now for this workflow only. Explain static status, any recommendation warning and requested details. Treat resize targets as settings, and listed weights as template dependencies. No further lookup is needed.'
       : 'No matching workflow was found. Check the ID or report that it could not be verified.';
     else if (!result.workflows.length) result.next = 'No matches. If useful, retry once with just the workflow name, then report the gap.';
     else if (search && result.total > 1) result.next = 'Use the chosen workflow ID for details. If the request does not identify one match, ask which workflow to use.';
@@ -765,7 +785,7 @@ export async function createPlugin(ctx, config, dependencies = {}) {
       (draftLookup || (row && (row.details || (workflowId && (row.id === workflowId || row.file === workflowId))) &&
         [row.id, row.file].some(value => typeof value === 'string' && brief.includes(value))))) {
       exec.deferContext?.({ role: 'user', id: randomUUID(), source: { kind: 'local-genai', form: 'notice', summary: 'catalog-answer-ready' }, content: [{
-        type: 'text', text: 'Use the catalog result to answer the selected workflow request now in the user’s language. Explain inputs, dependencies, steps or the maintenance gap as asked. Mark missing facts as unverified. A listed node is not necessarily a custom node. Do not look up sibling workflows, search externally or queue a job for this explanation.',
+        type: 'text', text: 'Use the catalog result to answer the selected workflow request now in the user’s language. State any recommendation warning before giving steps. Explain inputs, dependencies, steps or the maintenance gap as asked. Mark missing facts as unverified. A listed node is not necessarily a custom node. Do not look up sibling workflows, search externally or queue a job for this explanation.',
       }] });
     }
     if (args.includeResources === true) return result;
@@ -927,6 +947,10 @@ export async function createPlugin(ctx, config, dependencies = {}) {
     productionId:productionParameter,expectedRevision:revisionParameter,workflowId:requiredString('The prepared workflow id.'),
   },async(args,exec)=>{
     if(!args||Object.keys(args).some(key=>!['productionId','expectedRevision','workflowId'].includes(key)))throw new ControllerError('Only productionId, expectedRevision and workflowId are accepted; create a new draft for changed settings.');
+    if (role === 'studio') {
+      const warning = renderAdvisory(await renderProduction(args, exec), args, exec);
+      if (warning) return warning;
+    }
     await requireVision(exec);
     try{const result=await mutate(`/api/productions/${encodeURIComponent(args.productionId)}/render-prepared`,{workflowId:args.workflowId,expectedRevision:args.expectedRevision,requestId:requestIdFor(sessionIdentity(exec),exec.callId,'render-prepared')},exec,{validateResult:value=>{if(typeof value?.run?.id!=='string')throw new Error('Missing run');}});return await getResult(args.productionId,result.run.id,exec);}
     catch(error){if(exec.signal.aborted){try{await requestCancel(args.productionId,exec);}catch{throw new ControllerError('Cancellation delivery is unconfirmed. Inspect this production.');}throw new ControllerError('Cancellation was requested. The CPU controller owns stop confirmation and output preservation.');}throw error;}
@@ -944,10 +968,12 @@ export async function createPlugin(ctx, config, dependencies = {}) {
   }, async (args, exec) => {
     let spec = args;
     if (role === 'studio') {
-      const saved = await request(`/api/productions/${encodeURIComponent(args.productionId)}`, { sessionId: sessionIdentity(exec), signal: exec.signal });
+      const saved = await renderProduction(args, exec);
       const size = requiredOutputSize(saved.production);
       if (size) spec = { ...args, width: args.width ?? size.width, height: args.height ?? size.height };
       requireRequestedSize(saved.production, spec);
+      const warning = renderAdvisory(saved, spec, exec);
+      if (warning) return warning;
     }
     const validSize = role === 'studio'
       ? [spec.width, spec.height].every(value => Number.isSafeInteger(value) && value >= 1 && value <= 8192)

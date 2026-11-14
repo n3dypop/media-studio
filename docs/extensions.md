@@ -77,6 +77,62 @@ GPU fit, runtime behavior and visual quality
 require separate validation. A missing library index leaves the managed catalog
 usable. Keep model sources and hashes in the asset manifest or handoff.
 
+### Resource forecasts and execution warnings
+
+Record evidence in `ComfyUI/user/media-studio/workflow-resource-observations.json`
+(`version: 1`). Under `workflows`, use the library ID as the key. Store the
+editable template's `workflowSha256`, `gpu`, `width`, `height`, `sampleIntervalMs`,
+`vramPeakDeltaBytes` and `ramWorkingSetPeakBytes`. Include `frames`, `fps`,
+`steps`, `samples`, `gpuPeakBytes`, `ramPrivatePeakBytes`, `commitPeakDeltaBytes`
+and `outputBytes` when observed. Keep the actual graph, loaded weight versions,
+GPU/driver/runtime, cold or warm start, sampling method and output evidence in
+the handoff. Compare the actual templates after upgrades. Missing peak data stays
+unknown. Disk weight sizes, process RAM and system commit are separate quantities.
+
+Catalog shows observed peaks, an advisory planning target of 120% of each peak,
+installed capacity, current free capacity and output-disk space. The target is
+for the recorded settings and is compared with current memory only on a matching
+GPU. The live snapshot is taken before Controller's handoff from Strata and can
+change. Do not extrapolate measurements to other dimensions, frame counts, load
+policies or weight variants. The resource gate still uses its own fresh checks.
+
+For an unexpected runtime termination or sustained capacity problem, review the
+logs and add an `assessments` entry keyed by the affected library ID. Record the
+date, reason, affected settings and whether the evidence is direct or shared.
+For example:
+
+```json
+{
+  "version": 1,
+  "assessments": {
+    "example-video": {
+      "issue": "abnormal-termination",
+      "evidence": "observed",
+      "date": "2026-11-15",
+      "summary": "Windows stopped while the text encoder was loading.",
+      "attempt": { "width": 512, "height": 288, "frames": 22, "fps": 24 }
+    }
+  }
+}
+```
+
+Use `shared-path` when an untested sibling uses the implicated stage. Use
+`resource-capacity` with `verified` and a summary for a verified incompatibility.
+For a measured or documented hard minimum, set `workflowSha256` and
+`minimum` with the known fields `vramBytes`, `ramBytes` and `commitBytes`. A hard
+minimum above total capacity is tagged automatically for that template revision.
+Temporary pressure, cancellations, idle timeouts and missing measurements alone
+do not justify this tag. Recorded incidents remain visible after template edits.
+Remove or narrow an assessment after reviewing new evidence and recording the
+conditions and result in the handoff.
+
+Check the Catalog badge and `local_workflow_library` result. A direct standalone
+request must include the warning in its explanation. For a managed profile,
+Media Studio presents the specific warning before submitting the render and can
+proceed with the same settings after the user expressly confirms. Confirmation
+does not bypass profile registration, asset validation, lease ownership or the
+resource gate. Keep failure details and new findings in the maintenance record.
+
 Maintenance agents can use the official [ComfyUI CLI](https://docs.comfy.org/agent-tools/cli)
 or [ComfyUI MCP server](https://docs.comfy.org/agent-tools/mcp) to inspect live
 nodes and models, edit draft workflows and validate connections before execution.

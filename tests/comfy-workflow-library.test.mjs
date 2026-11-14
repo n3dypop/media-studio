@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { comfyWorkflowLibrary } from '../apps/controller/comfy-workflow-library.mjs';
@@ -94,6 +94,11 @@ test('DSH library tool forwards a video operation as a read-only query', async t
       if (parsed.pathname === '/api/workflow-catalog') {
         return Response.json({capabilities:[{modelProfile:'qwen-image-2.1-turbo-v1',mode:'edit'}]});
       }
+      if (parsed.pathname === '/api/productions/production' && parsed.searchParams.has('includeWorkflowAdvisories')) {
+        return Response.json({production:{id:'production'},workflowAdvisories:[{
+          id:'example',recommendation:{status:'not-recommended',issue:'abnormal-termination',summary:'OS bugcheck'},
+        }]});
+      }
       return Response.json(response);
     },
   });
@@ -153,6 +158,29 @@ test('DSH library tool forwards a video operation as a read-only query', async t
   assert.equal((await create.execute({request:'Recolor a cup',modelProfile:'qwen-image-2.1-turbo-v1',mode:'edit'},exec)).status,'generation_declined');
   events[events.length-1] = answer('Qwen-Image 2.1 Base で編集'); // option never offered
   assert.equal((await create.execute({request:'Recolor a cup',modelProfile:'qwen-image-2.1-turbo-v1',mode:'edit'},exec)).status,'workflow_unavailable_in_dsh');
+
+  const render = plugin.tools.find(tool => tool.name === 'local_prepared_render');
+  const settings = {productionId:'production',workflowId:'draft',expectedRevision:2};
+  const notice = await render.execute(settings, exec);
+  assert.equal(notice.status, 'workflow_warning');
+  assert.match(notice.warnings[0].recommendation.summary, /OS bugcheck/);
+  assert.ok(!seen.some(([method, url]) => method==='POST' && url.endsWith('/render-prepared')));
+  call.data.arguments=JSON.stringify({questions:[{id:notice.questionId,options:[{label:'実行する'},{label:'中止する'}]}]});
+  const riskAnswer = selected => {
+    const event = answer(selected);
+    event.data.message.content[0].text=JSON.stringify({answers:[{id:notice.questionId,selected:[selected]}]});
+    return event;
+  };
+  events[events.length-1]=riskAnswer('中止する');
+  assert.equal((await render.execute(settings,exec)).status,'generation_declined');
+  events[events.length-1]=riskAnswer('実行する');
+  assert.equal((await render.execute({...settings,expectedRevision:3},exec)).status,'workflow_warning');
+  // Approval allows the request to reach the existing vision and admission checks.
+  let visionChecks=0;
+  ctx.llm={resolveModelInfo:async()=>{visionChecks++;return {inputModalities:[]};}};
+  exec.agent.options={provider:'local-strata',model:'strata-core'};
+  await assert.rejects(() => render.execute({expectedRevision:2,workflowId:'draft',productionId:'production'},exec));
+  assert.equal(visionChecks,1);
 });
 
 test('a MiniMax H3 edit lookup reports the saved template inputs and defaults', async t => {
@@ -251,11 +279,39 @@ test('resource figures use actual disk sizes and the matching workflow measureme
   const options = { userDirectory, modelDirectory, installed: async () => ({ SaveImage: {}, CheckpointLoaderSimple: {
     input: { required: { ckpt_name: [[name]] } },
   } }), catalog: async () => [] };
-  const usage = async () => (await comfyWorkflowLibrary(options)).workflows[0].resourceUsage;
+  const readRow = async (extra = {}) => (await comfyWorkflowLibrary({ ...options, ...extra })).workflows[0];
+  const usage = async () => {
+    const { modelDiskBytes, runtime } = (await readRow()).resourceUsage;
+    return { modelDiskBytes, runtime };
+  };
   assert.deepEqual(await usage(), { modelDiskBytes: 1024, runtime: { ...sample, frames: undefined } });
+  const observed = () => ({ gpu:'NVIDIA GeForce RTX 4070 SUPER', capacity:{vramBytes:10000,ramBytes:20000,commitBytes:30000},
+    available:{vramBytes:2200,ramBytes:8000,commitBytes:17000} });
+  const observationsFile = path.join(indexDirectory, 'workflow-resource-observations.json');
+  const measured = await readFile(observationsFile);
+  assert.equal((await readRow({observeResources:observed})).recommendation, undefined, 'Transient shortage is advisory only');
+  const metrics = (await readRow({observeResources:observed})).resourceUsage.metrics;
+  assert.deepEqual(metrics[0], {key:'vramBytes',minimumBytes:null,headroomBytes:2400,capacityBytes:10000,availableBytes:2200,state:'below-headroom'});
+  assert.equal(metrics[2].state, 'unknown', 'Do not infer Windows commit from working set or model bytes');
+  const hash = createHash('sha256').update(graph).digest('hex');
+  const assessment = { workflowSha256:hash, minimum:{commitBytes:31000} };
+  await writeFile(observationsFile, JSON.stringify({ version:1, assessments:{'sd-depth':assessment} }));
+  const shortage = (await readRow({observeResources:observed})).recommendation;
+  assert.deepEqual(shortage, {status:'not-recommended',issue:'resource-capacity',evidence:'verified',shortfalls:[{key:'commitBytes',minimumBytes:31000,capacityBytes:30000}]});
+  Object.assign(assessment, {issue:'abnormal-termination',evidence:'observed',date:'2026-11-15',summary:'OS bugcheck'});
+  await writeFile(observationsFile, JSON.stringify({ version:1, assessments:{'sd-depth':assessment} }));
+  entry.profile = 'fixture';
+  await writeFile(path.join(indexDirectory, 'workflow-catalog.json'), JSON.stringify({version:1, workflows:[entry]}));
+  const advisories = () => readRow({profile:'fixture',mode:'depth',advisoriesOnly:true,observeResources:observed,
+    installed: () => assert.fail('Render advisory lookup does not call ComfyUI')});
+  assert.equal((await advisories()).recommendation.summary, 'OS bugcheck');
   await writeFile(canvasPath, graph + '\n');
   assert.deepEqual(await usage(), { modelDiskBytes: 1024, runtime: null });
+  assert.equal((await advisories()).recommendation.shortfalls, undefined, 'Template edits invalidate numeric minima');
+  assert.equal((await advisories()).recommendation.issue, 'abnormal-termination', 'Template edits preserve its reported incident');
   await writeFile(canvasPath, graph);
+  await writeFile(observationsFile, measured);
+  assert.equal((await usage()).runtime?.width, 512);
   const duplicate = path.join(modelDirectory, category, 'ambiguous', name);
   await mkdir(path.dirname(duplicate));
   await writeFile(duplicate, Buffer.alloc(1024));

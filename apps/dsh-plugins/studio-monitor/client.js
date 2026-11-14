@@ -223,14 +223,22 @@ window.__ModuleLoader__.load({
       addPrompt:'プロンプトに追加',openStudio:'Media Studioで開く',promptAdded:'入力欄に追加しました。',promptBlocked:'入力欄に追加できません。会話と入力欄の状態を確認してください。',managedUnavailable:'DSHでは利用不可',
       resourceUse:'予想リソース消費量',modelDisk:'モデルのディスク容量',peakVram:'VRAM増加・観測最大',
       peakRam:'ComfyUIの物理RAM・観測最大',ramBudget:'Strataの常駐RAM設定',unmeasured:'未測定',
-      sample:'測定条件',resourceNote:'既定フローでの参考値です。モデル、寸法、同時作業によって変動します。',
+      sample:'測定条件',resourceNote:'実測時と同じ条件の参考値に20%の余裕を加えています。現在の空きはStrataとの交代前の値です。',
+      notRecommended:'非推奨',abnormalTermination:'異常終了の記録あり',sharedPath:'共通処理に異常停止の記録あり',capacityShortfall:'最低要件に対して構成上の不足',
+      vramBytes:'VRAM',ramBytes:'物理RAM',commitBytes:'Windowsコミット',minimum:'最低要件',target:'余裕込みの目安',free:'現在の空き',total:'総容量／上限',
+      belowHeadroom:'目安または最低要件を下回る',incident:'異常停止の関連試験',commitPeak:'コミット増加・観測最大',outputFree:'出力先の空き',
+      weightsBreakdown:'重みの内訳',observedOutput:'観測した出力サイズ',observedGpuTotal:'GPU全体のVRAM・観測最大',privateRam:'ComfyUIのプライベートメモリ・観測最大',
     });
     Object.assign(dictionaries.en,{
       paneTitle:'Media Studio right pane',open:'When opening a conversation',placement:'Layout when opening both',manual:'Open manually',resources:'Media & Resources',catalog:'Catalog',both:'Open both',tabs:'Tabs in one pane',resourcesLeft:'Media & Resources left, Catalog right',catalogLeft:'Catalog left, Media & Resources right',paneHelp:'Changes apply to an unused right pane after closing Settings. If there is too little room to split, both open as tabs.',paneSaveError:'Could not save right-pane preferences.',
       addPrompt:'Add to prompt',openStudio:'Open in Media Studio',promptAdded:'Added to the message draft.',promptBlocked:'Could not add to the draft. Check the conversation and composer.',managedUnavailable:'Unavailable in DSH',
       resourceUse:'Expected resource use',modelDisk:'Model files on disk',peakVram:'Largest sampled VRAM increase',
       peakRam:'Peak sampled ComfyUI working set',ramBudget:'Strata resident RAM setting',unmeasured:'Unmeasured',
-      sample:'Measurement conditions',resourceNote:'Reference values for the default workflow. Usage varies with models, dimensions and concurrent work.',
+      sample:'Measurement conditions',resourceNote:'Headroom adds 20% to peaks for the recorded conditions. Current availability is measured before the Strata handoff.',
+      notRecommended:'Not recommended',abnormalTermination:'Recorded abnormal termination',sharedPath:'A shared execution path has a recorded crash',capacityShortfall:'Capacity is below an established minimum',
+      vramBytes:'VRAM',ramBytes:'Physical RAM',commitBytes:'Windows commit',minimum:'Minimum',target:'Suggested headroom',free:'Currently available',total:'Total / limit',
+      belowHeadroom:'Below the reference or minimum',incident:'Related incident test',commitPeak:'Peak sampled commit increase',outputFree:'Free output space',
+      weightsBreakdown:'Model files',observedOutput:'Observed output size',observedGpuTotal:'Peak sampled device VRAM use',privateRam:'Peak sampled ComfyUI private bytes',
     });
     const modes=['t2i','i2i','edit','layout','depth','background-removal','upscale','t2v','i2v','pose','mixed-controlnet'];
     const modeLabels={
@@ -282,15 +290,32 @@ window.__ModuleLoader__.load({
     }
     function WorkflowResources({data,t}){
       const runtime=data?.runtime;
+      const settings=({width,height,frames,fps,steps})=>[`${width}×${height}`,frames?`${frames}f`:null,fps?`${fps} fps`:null,steps?`${steps} steps`:null].filter(Boolean).join(' · ');
       const fields=[
         ['modelDisk',gib(data?.modelDiskBytes)??t('unknown')],
         ['peakVram',gib(runtime?.vramPeakDeltaBytes)??t('unmeasured')],
         ['peakRam',gib(runtime?.ramWorkingSetPeakBytes)??t('unmeasured')],
+        ['commitPeak',gib(runtime?.commitPeakDeltaBytes)??t('unmeasured')],
       ];
-      if(runtime)fields.push(['sample',[`${runtime.width}×${runtime.height}`,runtime.frames?`${runtime.frames}f`:null,
-        runtime.gpu,`${runtime.sampleIntervalMs} ms`].filter(Boolean).join(' · ')]);
+      if(runtime)fields.push(['sample',[settings(runtime),runtime.gpu,`${runtime.sampleIntervalMs} ms`].join(' · ')]);
+      if(runtime?.gpuPeakBytes)fields.push(['observedGpuTotal',gib(runtime.gpuPeakBytes)]);
+      if(runtime?.ramPrivatePeakBytes)fields.push(['privateRam',gib(runtime.ramPrivatePeakBytes)]);
+      if(runtime?.outputBytes)fields.push(['observedOutput',gib(runtime.outputBytes)]);
+      const incident=data?.incidentSample;
+      if(incident)fields.push(['incident',[settings(incident),...[
+        ['vramBytes',incident.vramFreeBytes],['ramBytes',incident.ramAvailableBytes],['commitBytes',incident.commitAvailableBytes],
+      ].filter(([,value])=>value!=null).map(([key,value])=>`${t(key)} ${t('free')} ${gib(value)}`)].join(' · ')]);
+      for(const metric of data?.metrics??[]){
+        const values=[['minimum',metric.minimumBytes],['target',metric.headroomBytes],['free',metric.availableBytes],['total',metric.capacityBytes]];
+        if(metric.state==='below-headroom')values.push(['belowHeadroom']);
+        fields.push([metric.key,values.filter(([,bytes])=>bytes!==null).map(([label,bytes])=>bytes===undefined?t(label):`${t(label)} ${gib(bytes)}`).join(' · ')]);
+      }
+      if(data?.observedAt)fields.push(['checked',clock(data.observedAt)]);
+      if(data?.outputVolumes?.length)fields.push(['outputFree',data.outputVolumes.map(({label,availableBytes})=>`${label} ${gib(availableBytes)}`).join(' · ')]);
       return h('details',{className:'sm-history'},h('summary',null,t('resourceUse')),
         h('dl',{className:'msc-fields'},...fields.flatMap(([key,value])=>[h('dt',{key:key+'-label'},t(key)),h('dd',{key},value)])),
+        data?.modelComponents?.length?h('details',null,h('summary',null,t('weightsBreakdown')),h('ul',null,...data.modelComponents
+          .map(({category,name,bytes})=>h('li',{key:`${category}/${name}`},`${name} · ${gib(bytes)??t('unknown')}`)))):null,
         h('p',{className:'sm-muted'},t('resourceNote')));
     }
     function workflowPrompt(row,ja){
@@ -316,11 +341,14 @@ window.__ModuleLoader__.load({
       const [pending,setPending]=useState(false);
       const state={'static-ready':'ready','dependencies-missing':'missing'}[row.state]??'invalid';
       const route=row.dshProfile?'managed':row.unavailableDshProfile?'managedUnavailable':'standalone';
+      const recommendation=row.recommendation;
+      const warning=recommendation?.issue==='abnormal-termination'?recommendation.evidence==='shared-path'?'sharedPath':'abnormalTermination':'capacityShortfall';
       const missing=(label,values)=>values?.length?h('div',null,t(label),h('ul',null,...values.map(value=>h('li',{key:value},value)))):null;
       return h('article',{className:'sm-job msc-row'},
         h('div',null,row.family&&row.family!==row.label?h('p',{className:'sm-muted'},row.family):null,h('h4',null,row.label)),
         h('div',{className:'msc-badges'},badge(operation(row.mode)),badge(t(route),row.dshProfile?'active':row.unavailableDshProfile?'warning':'idle'),
-          badge(t(state),state==='ready'?'success':'warning')),
+          badge(t(state),state==='ready'?'success':'warning'),recommendation?badge(t('notRecommended'),'warning'):null),
+        recommendation?h('p',{className:'sm-notice'},[t(warning),recommendation.summary].filter(Boolean).join(' · ')):null,
         h('div',{className:'msc-action'},h(Button,{type:'button',size:'sm',variant:'outline',disabled:pending,onClick:async()=>{
           setPending(true);
           try{setFeedback(await onSelect(row)?(startsStudio?'':'promptAdded'):'promptBlocked');}

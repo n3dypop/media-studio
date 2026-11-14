@@ -13,7 +13,7 @@ import { createRetiredEpochVerifier } from './server-recovery.mjs';
 import { StrataClient } from './strata.mjs';
 import { createStrataEpochVerifier } from './strata-epoch.mjs';
 import { ResourceGate } from './resource-gate.mjs';
-import { observeWindowsResources,observeOutputDisks } from './resources.mjs';
+import { observeWindowsResources,observeOutputDisks,createCatalogResourceObserver } from './resources.mjs';
 import { WorkflowRegistry } from './workflows.mjs';
 import { ProductionStore } from './productions.mjs';
 import { SearchService } from './search/service.mjs';
@@ -47,6 +47,8 @@ if(!Number.isInteger(config.port)||config.port<1024||config.port>65535||!activeM
 const nativeProbe=await createConfiguredNativeProbe(config.nativeProbe,root);
 const epochProbe=nativeProbe?{probe:nativeProbe.epoch}:{};
 const observeResources=nativeProbe?options=>observeWindowsResources({...options,readMemory:nativeProbe.resources}):observeWindowsResources;
+const outputLocations=[{label:'controller',path:join(root,'outputs')},{label:'comfyui',path:settings.outputDirectory}];
+const observeCatalogResources=createCatalogResourceObserver(observeResources,outputLocations);
 const data=join(root,'data/controller'); mkdirSync(data,{recursive:true});
 const tokenPath=join(data,'auth-token');
 try { writeFileSync(tokenPath,randomBytes(32).toString('hex'),{flag:'wx',mode:0o600}); } catch(error) { if(error.code!=='EEXIST') throw error; }
@@ -76,7 +78,7 @@ try {
   const verifyRetiredEpoch=createRetiredEpochVerifier({expectedExecutable:settings.comfyPythonExecutable,baseUrl:comfyUrl});
   const productions=new ProductionStore(store,{defaultModelProfile:config.profile,assets}),workflows=new WorkflowRegistry({
     root,directory:workflowDirectory,adapter,assets,comfyUserDirectory:workflowDirectory ? join(settings.comfyDirectory,'user') : null,
-    comfyModelDirectory:workflowDirectory ? join(settings.comfyDirectory,'models') : null,
+    comfyModelDirectory:workflowDirectory ? join(settings.comfyDirectory,'models') : null, observeCatalogResources,
   });
   workflows.qualifiedCatalogProfiles=()=>{
     let record;
@@ -123,7 +125,7 @@ try {
     }
   }
   engine=new RunEngine({store,adapter,verifyEpoch,verifyRetiredEpoch,gate,enhancer,outputRoot:join(root,'outputs'),...config,
-    observeOutputDisks:()=>observeOutputDisks([{label:'controller',path:join(root,'outputs')},{label:'comfyui',path:settings.outputDirectory}])});
+    observeOutputDisks:()=>observeOutputDisks(outputLocations)});
   const mossPe=gate?new MossPeCoordinator({store,productions,adapter,gate,assets,verifyEpoch}):null;
   const qwenPeLicense=()=>{
     try{

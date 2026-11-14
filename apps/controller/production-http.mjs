@@ -56,7 +56,7 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
     const input = await body(req, 65536);
     if (url.search || typeof input?.reference !== 'string') throw new ApiError(400, 'A workflow reference is required');
     const result = await workflows.library({reference:input.reference,limit:25});
-    json(res,200,{state:result.state,total:result.total,workflows:result.workflows.map(({id,label,mode,file,dshProfile,unavailableDshProfile,state})=>({id,label,mode,file,dshProfile,unavailableDshProfile,state}))});return true;
+    json(res,200,{state:result.state,total:result.total,workflows:result.workflows.map(({id,label,mode,file,dshProfile,unavailableDshProfile,state,recommendation})=>({id,label,mode,file,dshProfile,unavailableDshProfile,state,recommendation}))});return true;
   }
   if (path === '/api/workflow-library' && req.method === 'GET') {
     const filters = url.searchParams, keys = ['id', 'query', 'mode', 'media', 'details', 'page', 'limit'];
@@ -162,7 +162,14 @@ export async function productionRoute({req,res,path,url,role,store,engine,produc
   }
   const production=productions.get(id,session);
   if(req.method==='POST'&&action&&!['cancel','cancel-owned','workflow-recovery'].includes(action))productions.assertNoPendingWorkflow(id,session);
-  if(!action&&req.method==='GET') {json(res,200,{production});return true;}
+  if(!action&&req.method==='GET') {
+    if(url.searchParams.get('includeWorkflowAdvisories')==='1') {
+      const {modelProfile:profile,mode='t2i'}=production.brief;
+      const advisories=(await workflows.library({profile,mode,advisoriesOnly:true})).workflows;
+      json(res,200,{production,workflowAdvisories:advisories});return true;
+    }
+    json(res,200,{production});return true;
+  }
   if(action==='cancel-by-request'&&req.method==='GET') {
     if([...url.searchParams.keys()].some(key=>key!=='requestId')||url.searchParams.getAll('requestId').length!==1)throw new ApiError(400,'停止要求IDを一つ指定してください。');
     const result=productions.findCancelByRequest(id,session,url.searchParams.get('requestId'));

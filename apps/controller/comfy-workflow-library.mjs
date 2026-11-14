@@ -105,23 +105,24 @@ async function inspectWorkflow(root, entry, objects, resources, detailed) {
     graph = JSON.parse(bytes);
   }
   catch (error) {
-    if (error.code === 'ENOENT') return { state: 'template-missing' };
-    return { state: 'template-invalid' };
+    return { state: error.code === 'ENOENT' ? 'template-missing' : 'template-invalid', ...await resources(entry, null) };
   }
   const subgraphs = graph?.definitions?.subgraphs ?? [];
   if (!Array.isArray(graph?.nodes) || !Array.isArray(subgraphs) || subgraphs.some(graph => !Array.isArray(graph?.nodes))) {
-    return { state: 'template-invalid' };
+    return { state: 'template-invalid', ...await resources(entry, null) };
   }
   const groups = new Set(subgraphs.map(graph => graph.id));
   const nodes = [...graph.nodes, ...subgraphs.flatMap(graph => graph.nodes)];
   const types = [...new Set(nodes.map(node => node?.type))]
     .filter(type => !groups.has(type) && type !== 'Note' && type !== 'MarkdownNote' && type !== 'Reroute');
-  if (!types.length || types.some(type => typeof type !== 'string' || !nodeName.test(type))) return { state: 'template-invalid' };
+  if (!types.length || types.some(type => typeof type !== 'string' || !nodeName.test(type))) {
+    return { state: 'template-invalid', ...await resources(entry, null) };
+  }
   const missingNodes = types.filter(type => !registeredNode(objects, type));
   const missingModels = entry.models.filter(model => !modelAvailable(objects, model)).map(model => model.name);
-  const resourceUsage = await resources(entry, createHash('sha256').update(bytes).digest('hex'));
+  const resourceReport = await resources(entry, createHash('sha256').update(bytes).digest('hex'));
   return { state: missingModels.length || missingNodes.length ? 'dependencies-missing' : 'static-ready',
-    resourceUsage,
+    ...resourceReport,
     ...(detailed && { details: workflowDetails(graph, nodes, types.slice(0, 80), entry.models, objects) }),
     ...(missingNodes.length && { missingNodes }), ...(missingModels.length && { missingModels }) };
 }
@@ -153,7 +154,7 @@ function referencedWorkflowIds(workflows, reference) {
   return result;
 }
 
-export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, installed, catalog, id, query, reference, mode, media, details, page = 1, limit = 12 }) {
+export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, installed, catalog, observeResources, id, query, reference, mode, media, details, profile, advisoriesOnly = false, page = 1, limit = 12 }) {
   const locator = typeof id === 'string' ? normalize(id) : '';
   if ((id !== undefined && ((!workflowLibraryId.test(locator) && (!bounded(locator, 256) || !workflowLibraryFile.test(locator))) || query !== undefined || page !== 1)) ||
     (query !== undefined && !bounded(query, WORKFLOW_QUERY_LIMIT)) || (mode !== undefined && !/^[a-z0-9-]{1,24}$/.test(mode))
@@ -184,14 +185,27 @@ export async function comfyWorkflowLibrary({ userDirectory, modelDirectory, inst
   const operations = [...new Set(index.workflows.map(entry => entry.mode))].sort();
   const entries = index.workflows.filter(entry => {
     const text = searchable([entry.id, entry.family, entry.label, entry.file, entry.mode, entry.profile, ...entry.models.map(model => model.name)].join(' '));
-    return (!referencedIds || referencedIds.has(entry.id)) && (!locator || entry.id === locator || entry.file === locator) && (!mode || mode === entry.mode) && (!media || media === entry.media) && terms.every(term => text.includes(term));
+    return (!profile || entry.profile === profile) && (!referencedIds || referencedIds.has(entry.id)) && (!locator || entry.id === locator || entry.file === locator) && (!mode || mode === entry.mode) && (!media || media === entry.media) && terms.every(term => text.includes(term));
   }).sort((a, b) => a.family.localeCompare(b.family) || a.id.localeCompare(b.id));
   const selected = entries.slice((page - 1) * limit, page * limit);
   if (!selected.length) return { ...empty, state: 'configured', operations, total: entries.length };
-  const objects = await installed();
-  const managed = selected.some(entry => entry.profile) ? await catalog(objects) : [];
   const observations = await readLocalJson(root, 'media-studio/workflow-resource-observations.json', 128 * 1024).catch(() => null);
-  const resources = workflowResourceReader(modelDirectory, observations);
+  if (advisoriesOnly) {
+    // Read all matching advisories without depending on a live ComfyUI lease or loading schemas.
+    const applicable = entries.filter(entry => Object.hasOwn(observations?.assessments ?? {}, entry.id));
+    if (!applicable.length) return { ...empty, state: 'configured' };
+    const resources = workflowResourceReader(null, observations, await observeResources?.());
+    const rows = await Promise.all(applicable.map(async entry => {
+      const bytes = await readLocalFile(root, `default/workflows/${entry.file}`, 1024 * 1024).catch(() => null);
+      const { recommendation } = await resources(entry, bytes && createHash('sha256').update(bytes).digest('hex'));
+      return recommendation && { id: entry.id, label: entry.label, recommendation };
+    }));
+    const workflows = rows.filter(Boolean);
+    return { ...empty, state: 'configured', total: workflows.length, workflows };
+  }
+  const [objects, machine] = await Promise.all([installed(), observeResources?.()]);
+  const managed = selected.some(entry => entry.profile) ? await catalog(objects) : [];
+  const resources = workflowResourceReader(modelDirectory, observations, machine);
   const workflows = await Promise.all(selected.map(async entry => {
     const { id, family, label, mode, media, file, profile } = entry;
     const dshProfile = managed.find(item => item.modelProfile === profile && item.mode === mode)?.modelProfile;

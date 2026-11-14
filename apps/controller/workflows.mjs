@@ -385,13 +385,14 @@ function compactDefinition(definition) {
 }
 
 export class WorkflowRegistry {
-  constructor({ root, directory, adapter,assets=null,comfyUserDirectory=null,comfyModelDirectory=null } = {}) {
+  constructor({ root, directory, adapter,assets=null,comfyUserDirectory=null,comfyModelDirectory=null,observeCatalogResources } = {}) {
     if (typeof root !== 'string' || !root || !adapter?.request || !adapter?.profile) throw new TypeError('WorkflowRegistry needs a workspace root and ComfyAdapter');
     this.root = path.resolve(root);
     if (directory !== undefined && !path.isAbsolute(directory)) throw new TypeError('Workflow storage must be absolute');
     this.directory = directory ?? path.join(this.root, 'workflows', 'drafts');
     this.adapter = adapter;
     this.comfyUserDirectory = comfyUserDirectory;
+    this.observeCatalogResources = observeCatalogResources;
     this.comfyModelDirectory = comfyModelDirectory;
     this.assets=assets;
     this.profileId=adapter.modelProfile??PROFILE;
@@ -414,7 +415,8 @@ export class WorkflowRegistry {
   }
 
   async library(filters) {
-    return comfyWorkflowLibrary({ ...filters, userDirectory: this.comfyUserDirectory, modelDirectory: this.comfyModelDirectory, installed: () => this.installed(),
+    return comfyWorkflowLibrary({ ...filters, userDirectory: this.comfyUserDirectory, modelDirectory: this.comfyModelDirectory,
+      observeResources: this.observeCatalogResources, installed: () => this.installed(),
       catalog: objects => this.discoverCapabilities(objects).capabilities });
   }
 

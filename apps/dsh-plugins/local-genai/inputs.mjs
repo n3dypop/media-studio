@@ -18,7 +18,7 @@ export function currentUserRequest(session) {
 
 // DSH records a question reply as an owned tool result within the original
 // turn. Bind the answer to the actual question and its displayed options.
-export function currentUserChoices(session) {
+export function currentUserChoices(session, questionId) {
   const events = session?.snapshotEvents?.();
   if (!Array.isArray(events)) return [];
   const start = events.findLastIndex(event => event.type === 'turn/start');
@@ -39,6 +39,7 @@ export function currentUserChoices(session) {
         const result = JSON.parse(message.content[0].text);
         if (!Array.isArray(result.answers) || !Array.isArray(args?.questions)) continue;
         for (const answer of result.answers) {
+          if (questionId === undefined ? /^workflow_risk_/.test(answer.id) : answer.id !== questionId) continue;
           const questions = args.questions.filter(question => question.id === answer.id);
           if (questions.length !== 1 || !Array.isArray(answer.selected)) continue;
           const labels = (questions[0].options ?? []).map(option => option.label);
