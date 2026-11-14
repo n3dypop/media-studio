@@ -36,6 +36,10 @@ warning appears when verified settings differ from those used at startup.
 Refresh updates both sections without loading models or queuing workflows. **Media & Resources**
 continues to show usage, service controls and conversation jobs.
 
+The service and production controls accept JSON mutations from the active
+loopback DSH listener. The Desktop originless route also requires an
+owner-authenticated, route-bound proof. Monitor and catalog routes are read-only.
+
 Controller changes that affect tools/catalog, workflow inputs, output evidence
 or progress must update their integration contracts and tests in the same
 revision. Service-management code also shares the Controller's process-identity

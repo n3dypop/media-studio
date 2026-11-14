@@ -4,6 +4,7 @@ import {ACTIONS_PATH,actionsHandler} from './actions.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
 import {createHostDesktopRequestTrust,registerDesktopProof} from '../shared/desktop-request-trust.mjs';
 import {desktopPackagedRuntimeOption,withDesktopPackagedRuntime} from '../local-genai/runtime.mjs';
+import {localHostOrigin} from '../shared/web-route.mjs';
 
 export const name='local-genai-studio-controls';
 export const Config=withDesktopPackagedRuntime(withControllerSessionNamespace(createRuntimeConfig({allowUnknown:true}),{allowedKeys:['desktopPackagedRuntime']}));
@@ -12,16 +13,7 @@ const STYLE=`.local-studio-controls{padding:12px 0;line-height:1.65;min-width:0;
 .local-studio-controls h3{font-size:1em;font-weight:600;margin:0 0 6px}.local-studio-controls p{margin:4px 0 10px}
 .local-studio-controls pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:24rem;overflow:auto;font-size:.85em}.local-studio-controls summary{cursor:pointer}`;
 
-// Trust the listener owned by this Host, rather than a configured Web port or
-// request-supplied Host header. An unavailable or non-loopback listener is not
-// an origin on which to authorize an action.
-export function localHostOrigin(server){
-  try{
-    if(!server||server.host!=='127.0.0.1'||server.protocol!=='http:'||!Number.isInteger(server.port)||server.port<1||server.port>65535||typeof server.getOrigin!=='function')return null;
-    const origin=server.getOrigin();
-    return origin===`http://127.0.0.1:${server.port}`?origin:null;
-  }catch{return null;}
-}
+export {localHostOrigin};
 
 // This sender is valid only behind DSH's owner-authenticated connection.fetch
 // route. Calling the Host service directly does not authorize the requester.

@@ -4,6 +4,26 @@ import {createHostDesktopRequestTrust} from '../apps/dsh-plugins/shared/desktop-
 import {actionsHandler} from '../apps/dsh-plugins/studio-controls/actions.mjs';
 import {servicesHandler,serviceSettingsHandler} from '../apps/dsh-plugins/studio-services/index.mjs';
 
+test('Web service mutations check the live listener and an exact JSON media type',async()=>{
+  let origin='http://127.0.0.1:42001';
+  const calls=[];
+  const services=servicesHandler({manager:{submit:async input=>{calls.push(input);return {created:true};}},dshOrigin:()=>origin});
+  const settings=serviceSettingsHandler({settings:{save:async input=>{calls.push(input);return {saved:true};}},dshOrigin:()=>origin});
+  for(const [handler,marker] of [[services,'service'],[settings,'service-settings']]){
+    const post=(source,contentType)=>handler(new Request('http://127.0.0.1:42001/api/local-studio/'+marker,{
+      method:'POST',headers:{...(source?{origin:source}:{}),'content-type':contentType,[`x-local-studio-${marker}`]:'1'},body:'{}',
+    }));
+    assert.equal((await post(origin,'application/jsonp')).status,403);
+    assert.equal((await post(null,'application/json')).status,403);
+    assert.equal((await post('http://127.0.0.1:42002','application/json')).status,403);
+    assert.equal((await post(origin,'Application/JSON; charset=utf-8')).status,handler===services?202:200);
+    const before=origin;origin=null;
+    assert.equal((await post(before,'application/json')).status,403);
+    origin=before;
+  }
+  assert.equal(calls.length,2);
+});
+
 const origin='http://127.0.0.1:3085',cookie='dsh-auth-fixture=synthetic';
 const routes=[
   {path:'/api/local-studio/actions',marker:'x-local-studio-action'},

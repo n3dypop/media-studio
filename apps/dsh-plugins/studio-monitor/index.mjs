@@ -1,6 +1,7 @@
 import {readFile} from 'node:fs/promises';
 import {createRuntimeConfig,runtimeRootUrl} from '../shared/plugin-config.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
+import {jsonResponse as response} from '../shared/web-route.mjs';
 
 export const name='local-studio-monitor';
 export const Config=withControllerSessionNamespace(createRuntimeConfig({allowUnknown:true}));
@@ -13,8 +14,6 @@ const ROUTES = [
   [CATALOG_PATH, '/api/workflow-library', { filters: ['query', 'media', 'mode', 'page'], unavailable: 'ワークフローを取得できません。' }],
   [CORE_PATH, '/api/core-catalog', { unavailable: 'Strataのモデル情報を確認できません。' }],
 ];
-const headers={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'};
-const response=(status,value)=>new Response(JSON.stringify(value),{status,headers});
 const validSession=value=>typeof value==='string'&&value.trim().length>0&&value.length<=160&&!/[\x00-\x1f\x7f]/.test(value);
 
 // The endpoint is read-only, authenticated by DSH's connection layer, and

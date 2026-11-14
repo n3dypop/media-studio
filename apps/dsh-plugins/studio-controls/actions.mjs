@@ -1,11 +1,12 @@
 import {createHash} from 'node:crypto';
+import {isLocalJsonMutation,jsonResponse} from '../shared/web-route.mjs';
 // Authenticated DSH connection route. The browser never receives the controller
 // administrator token, and the agent is not given an approval tool.
 export const ACTIONS_PATH='/api/local-studio/actions';
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const validSession=s=>typeof s==='string'&&s.length>0&&s.length<=150&&!/[\x00-\x1f\x7f]/.test(s);
-const error=(status,message)=>new Response(JSON.stringify({error:message}),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
-const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+const error=(status,message)=>jsonResponse(status,{error:message});
+const ok=(value,status=200)=>jsonResponse(status,value);
 
 export function actionsHandler({sessionQuery,controllerRequest,dshOrigin,sendPlanning,planningReceipt=async()=>false,controllerSession=sessionId=>sessionId,mutationAllowed}) {
   const planningSends=new Map();
@@ -60,7 +61,7 @@ export function actionsHandler({sessionQuery,controllerRequest,dshOrigin,sendPla
       }
       if(request.method!=='POST')return error(405,'未対応の操作です。');
       const hostOrigin=typeof dshOrigin==='function'?dshOrigin():dshOrigin;
-      if(mutationAllowed ? !mutationAllowed(request) : !hostOrigin||request.headers.get('origin')!==hostOrigin||request.headers.get('x-local-studio-action')!=='1'||!(request.headers.get('content-type')??'').startsWith('application/json')||request.headers.get('sec-fetch-site')==='cross-site')return error(403,'DSH画面からの本人操作を確認できません。');
+      if(mutationAllowed ? !mutationAllowed(request) : !isLocalJsonMutation(request,hostOrigin,'x-local-studio-action'))return error(403,'DSH画面からの本人操作を確認できません。');
       const input=await request.json();if(!input||typeof input!=='object'||Array.isArray(input))return error(400,'要求が不正です。');
       const searchTurn=await verifySession(input.sessionId,request.signal);
       if(input.action==='stop'||input.action==='stop-session'){

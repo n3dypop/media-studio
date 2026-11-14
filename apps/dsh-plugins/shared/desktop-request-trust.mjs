@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import {isJsonRequest,jsonResponse} from './web-route.mjs';
 
 // This is request-shape protection, not authentication or an authorization
 // policy. Both the challenge and mutation MUST be reached through DSH's
@@ -49,15 +50,12 @@ export function createDesktopRequestTrust({ origin, ttlMs = 300_000, now = Date.
     const cookie = sessionCookie(request), time = now();
     if (!cookie || !Number.isSafeInteger(time) || time < 0) return denied();
     const issued = String(time);
-    return new Response(JSON.stringify({ proof: `${issued}.${signature(cookie, issued, target)}` }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
-    });
+    return jsonResponse(200,{proof:`${issued}.${signature(cookie,issued,target)}`});
   }
 
   function mutationAllowed(request, { marker } = {}) {
     if (request.method !== 'POST' || typeof marker !== 'string' || !marker || request.headers.get(marker) !== '1' ||
-        !/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '') || !browserShape(request)) return false;
+        !isJsonRequest(request) || !browserShape(request)) return false;
     if (request.headers.get('origin') === origin) return true; // Existing authenticated Web behavior.
     let target;
     try { target = checkedAudience({ method: request.method, path: new URL(request.url).pathname }); } catch { return false; }
