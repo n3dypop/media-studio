@@ -1,14 +1,12 @@
+import {successfulRenderContent} from './render-events.mjs';
+
 export const VIDEO_PATH = '/api/local-studio/video';
 export const MAX_VIDEO_BYTES = 256 * 1024 * 1024;
-const OUTPUT_TOOLS = new Set(['local_production_render', 'local_render_result']);
 const BASE_HEADERS = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Type': 'video/mp4' };
 
 export function recordedVideo(events, attachmentId) {
-  const calls = new Set();
-  for (const event of events) {
-    if (event.type === 'tool/call' && OUTPUT_TOOLS.has(event.data?.name)) calls.add(event.data.callId);
-    if (event.type !== 'tool/result' || event.surfaceOp !== 'append' || !calls.has(event.data?.message?.source?.callId) || event.data?.isError) continue;
-    for (const part of event.data.message.content ?? []) {
+  for (const content of successfulRenderContent(events)) {
+    for (const part of content) {
       const ref = part?.type === 'file' ? part.attachment : null;
       if (ref?.attachmentId !== attachmentId || !/^sha256:[a-f0-9]{64}$/.test(ref.attachmentId) || typeof ref.name !== 'string' || !/\.mp4$/i.test(ref.name)
         || /[\\/\x00-\x1f\x7f]/.test(ref.name) || !Number.isSafeInteger(ref.bytes) || ref.bytes < 1 || ref.bytes > MAX_VIDEO_BYTES) continue;
@@ -59,7 +57,9 @@ export function videoHandler({ sessionQuery, attachments }) {
       'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(ref.name)}`,
       ...(range.partial ? { 'Content-Range': `bytes ${range.start}-${range.end}/${ref.bytes}` } : {}) };
     if (request.method === 'HEAD') return new Response(null, { status: range.partial ? 206 : 200, headers });
-    const iterator = attachments.readFileStream(ref, request.signal)[Symbol.asyncIterator]();
+    let iterator;
+    try { iterator = attachments.readFileStream(ref, request.signal)[Symbol.asyncIterator](); }
+    catch { return fail(503, 'Video not available'); }
     let offset = 0;
     const stream = new ReadableStream({
       async pull(controller) {
@@ -74,9 +74,11 @@ export function videoHandler({ sessionQuery, attachments }) {
             const chunk = next.value; const begin = offset; offset += chunk.byteLength;
             if (offset > ref.bytes) throw new Error('Stored video exceeds its recorded size.');
             const from = Math.max(0, range.start - begin); const until = Math.min(chunk.byteLength, range.end + 1 - begin);
+            // DSH verifies the stored length and digest at EOF. Keep reading
+            // the authorized stream even when only a byte range is returned.
             if (until > from) { controller.enqueue(chunk.slice(from, until)); return; }
           }
-        } catch (error) { await iterator.return?.(); controller.error(error); }
+        } catch (error) { try { await iterator.return?.(); } finally { controller.error(error); } }
       },
       async cancel() { await iterator.return?.(); },
     });

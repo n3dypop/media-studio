@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {successfulRenderContent} from './render-events.mjs';
 
 export const ORIGINAL_PATH='/api/local-studio/original-image';
 const MAX_PNG_BYTES=64*1024*1024;
@@ -9,12 +10,7 @@ const contentType={'Cache-Control':'private, no-store','X-Content-Type-Options':
 
 /** Only a successfully appended, actually delivered image can authorize a download. */
 export function recordedOriginal(events,{runId,name,sha256}){
-  const calls=new Set();
-  for(const event of events??[]){
-    if(event.type==='tool/call'&&['local_production_render','local_prepared_render','local_render_result'].includes(event.data?.name))calls.add(event.data.callId);
-    if(event.type!=='tool/result'||event.surfaceOp!=='append'||event.data?.message?.isError||!calls.has(event.data?.message?.source?.callId))continue;
-    const content=event.data.message.content;
-    if(!Array.isArray(content))continue;
+  for(const content of successfulRenderContent(events)){
     const text=content.find(part=>part?.type==='text'&&typeof part.text==='string')?.text;
     if(!text||text.length>1024*1024)continue;
     let meta;try{meta=JSON.parse(text);}catch{continue;}
@@ -49,7 +45,10 @@ export function originalHandler({sessionQuery,fetchRun,fetchArtifact,controllerS
       const artifact=run?.artifacts?.find(a=>a?.name===name&&a?.sha256===sha256&&a?.mime==='image/png');
       if(run?.id!==runId||run?.sessionId!==controllerSession(sessionId)||!artifact)return fail(404,'Image not recorded in this session');
       const response=await fetchArtifact({sessionId,runId,name,signal:request.signal});
-      if(!response.ok||response.headers.get('content-type')?.split(';')[0]!=='image/png'||!response.body)return fail(404,'Image not available');
+      if(!response.ok||response.headers.get('content-type')?.split(';')[0]!=='image/png'||!response.body){
+        await response.body?.cancel().catch(()=>{});
+        return fail(404,'Image not available');
+      }
       const declared=response.headers.get('content-length');
       if(declared!==null&&(!/^\d+$/.test(declared)||Number(declared)>MAX_PNG_BYTES)){await response.body.cancel();return fail(413,'Image exceeds size limit');}
       const reader=response.body.getReader(),chunks=[];let size=0;

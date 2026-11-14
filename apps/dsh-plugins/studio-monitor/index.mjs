@@ -1,6 +1,6 @@
-import {readFile} from 'node:fs/promises';
-import {createRuntimeConfig,runtimeRootUrl} from '../shared/plugin-config.mjs';
-import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
+import {createRuntimeConfig} from '../shared/plugin-config.mjs';
+import {withControllerSessionNamespace} from '../shared/controller-session.mjs';
+import {createControllerRequest} from '../shared/controller-request.mjs';
 import {jsonResponse as response} from '../shared/web-route.mjs';
 
 export const name='local-studio-monitor';
@@ -39,17 +39,11 @@ export function monitorHandler({sessionQuery,controllerRequest,filters=[],unavai
 }
 
 export async function apply(ctx,config){
-  const sessionMode=controllerSessionMode(config);
-  const root=runtimeRootUrl(config);
-  const configuration=JSON.parse(await readFile(new URL('config/controller.json',root),'utf8'));
-  if(!Number.isInteger(configuration.port)||configuration.port<1024||configuration.port>65535)throw new Error('Invalid controller port');
-  const controllerRequest=path=>async({sessionId,signal,params})=>{
-    const token=(await readFile(new URL('data/controller/dsh-token',root),'utf8')).trim();
-    if(!/^[a-f0-9]{64}$/.test(token))throw new Error('Controller authentication unavailable');
-    const url=new URL(path,`http://127.0.0.1:${configuration.port}`);
-    url.search=params.toString();
-    const result=await fetch(url,{headers:{Authorization:`Bearer ${token}`,'X-DSH-Session':controllerSessionId(sessionId,sessionMode)},cache:'no-store',redirect:'error',signal:signal?AbortSignal.any([signal,AbortSignal.timeout(20000)]):AbortSignal.timeout(20000)});
-    if(!result.ok)throw new Error('Controller monitoring unavailable');return result.json();
+  const request=await createControllerRequest(config,{timeoutMs:20000});
+  const controllerRequest=path=>async options=>{
+    const result=await request(path,options);
+    if(!result.ok)throw Error('Controller monitoring unavailable');
+    return result.json();
   };
   for (const [path, endpoint, options] of ROUTES) {
     ctx.effect(() => ctx.connection.fetch.register({

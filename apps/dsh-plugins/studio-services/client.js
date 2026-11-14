@@ -166,12 +166,19 @@ window.__ModuleLoader__.load({
         operation.error?h('p',{className:'ss-notice'},String(operation.error?.message??operation.error)):null,
         needsAttention&&steps.length?h('details',{className:'ss-operation-details'},h('summary',null,'診断用の操作記録'),h('ol',null,...steps.map((step,i)=>h('li',{key:i},typeof step==='string'?step:`${step.label??step.name??step.service??'手順'}${step.state||step.status?' · '+(stateNames[step.state??step.status]??step.state??step.status):''}`)))):null);
     }
-    async function settingsRequest(body,{signal}={}){
+    async function requestSettings(path,target,body,signal){
       const headers=body?{'Content-Type':'application/json','X-Local-Studio-Service-Settings':'1'}:{};
-      const proof=body?await desktopProof('service-settings',signal):null;if(proof)headers['X-Local-Studio-Desktop-Proof']=proof;
-      const response=await fetch(SETTINGS_PATH,{method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',headers,...(body?{body:JSON.stringify(body)}:{}),signal});
-      let value;try{value=await response.json();}catch{throw Error('起動パス設定の応答を確認できません。');}
-      if(!response.ok)throw Object.assign(Error(typeof value.error==='string'?value.error:'起動パス設定を取得できません。'),{definite:response.status>=400&&response.status<500,status:response.status});
+      const proof=body?await desktopProof(target,signal):null;
+      if(proof)headers['X-Local-Studio-Desktop-Proof']=proof;
+      const response=await fetch(path,{method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',headers,...(body?{body:JSON.stringify(body)}:{}),signal});
+      const unavailable='設定の応答を確認できません。';
+      let value;try{value=await response.json();}catch{throw Error(unavailable);}
+      if(!response.ok)throw Object.assign(Error(typeof value?.error==='string'?value.error:unavailable),{definite:response.status>=400&&response.status<500,status:response.status});
+      if(typeof value?.revision!=='string'||!value.values||typeof value.values!=='object'||Array.isArray(value.values))throw Error(unavailable);
+      return value;
+    }
+    async function settingsRequest(body,{signal}={}){
+      const value=await requestSettings(SETTINGS_PATH,'service-settings',body,signal);
       if(typeof value.revision!=='string'||!PATH_FIELDS.every(([key])=>typeof value.values?.[key]==='string'))throw Error('起動パス設定の内容を確認できません。');
       return value;
     }
@@ -180,8 +187,8 @@ window.__ModuleLoader__.load({
       let state={value:null,draft:null,loading:false,saving:false,error:'',message:'',uncertain:false};
       const publish=patch=>{if(disposed)return;state={...state,...patch};for(const fn of listeners)fn();};
       const adopt=value=>publish({value,draft:{...value.values},error:'',uncertain:false});
-      async function reload(){
-        if(disposed||saveLock)return;
+      async function reload({cleanOnly=false}={}){
+        if(disposed||saveLock||cleanOnly&&(state.uncertain||state.value&&Object.keys(state.value.values).some(key=>state.value.values[key]!==state.draft?.[key])))return;
         read?.abort.abort();const abort=new AbortController(),current={abort};read=current;
         publish({loading:true,error:'',message:''});
         const promise=(async()=>{try{const value=await request(null,{signal:AbortSignal.any([abort.signal,AbortSignal.timeout(20000)])});if(!disposed&&read===current&&!abort.signal.aborted)adopt(value);}catch(e){if(!disposed&&read===current&&!abort.signal.aborted)publish({error:e.message});}finally{if(read===current){read=null;publish({loading:false});}}})();
@@ -195,8 +202,8 @@ window.__ModuleLoader__.load({
         finally{saveLock=false;publish({saving:false});}
       }
       return {snapshot:()=>state,subscribe(fn){listeners.add(fn);return()=>listeners.delete(fn);},reload,save,
-        change(key,value){if(!disposed&&!state.loading&&!saveLock&&fields.includes(key))publish({draft:{...state.draft,[key]:value},message:''});},
-        activate(){if(disposed)return()=>{};active++;if(active===1&&!state.value)void reload();let live=true;return()=>{if(!live)return;live=false;active--;if(active===0&&read){const pending=read;read=null;pending.abort.abort();publish({loading:false});}};},
+        change(key,value){if(!disposed&&!state.loading&&!saveLock&&state.draft&&fields.includes(key))publish({draft:{...state.draft,[key]:value},message:''});},
+        activate(){if(disposed)return()=>{};active++;if(active===1)void reload({cleanOnly:true});let live=true;return()=>{if(!live)return;live=false;active--;if(active===0&&read){const pending=read;read=null;pending.abort.abort();publish({loading:false});}};},
         dispose(){disposed=true;read?.abort.abort();listeners.clear();}};
     }
     const engineFields={
@@ -231,18 +238,7 @@ window.__ModuleLoader__.load({
         {id:'espLastLayer',en:'Last layer',ja:'終了レイヤー',min:1,max:47,step:1},
       ]},
     ];
-    async function engineRequest(engine,body,{signal}={}){
-      const headers=body?{'Content-Type':'application/json','X-Local-Studio-Service-Settings':'1'}:{};
-      const proof=body?await desktopProof('engine-settings',signal):null;
-      if(proof)headers['X-Local-Studio-Desktop-Proof']=proof;
-      const response=await fetch(ENGINE_SETTINGS_PATH+'?'+new URLSearchParams({engine}),{
-        method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',headers,
-        ...(body?{body:JSON.stringify(body)}:{}),signal,
-      });
-      const value=await response.json();
-      if(!response.ok)throw Object.assign(Error(value.error),{definite:response.status<500});
-      return value;
-    }
+    const engineRequest=(engine,body,{signal}={})=>requestSettings(ENGINE_SETTINGS_PATH+'?'+new URLSearchParams({engine}),'engine-settings',body,signal);
     function EnginePage({engine,editor,controller,t=defaultText}){
       const state=useSyncExternalStore(editor.subscribe,editor.snapshot,editor.snapshot);
       const lifecycle=useSyncExternalStore(controller.subscribe,controller.snapshot,controller.snapshot);
@@ -251,9 +247,11 @@ window.__ModuleLoader__.load({
         return ()=>{deactivateEditor();deactivateServices();};
       },[editor,controller]);
       const operation=lifecycle.value?.operation;
-      useEffect(()=>{if(operation?.service===engine&&operation.state==='completed')void editor.reload();},[editor,engine,operation?.id,operation?.state]);
       const current=state.value,draft=state.draft??{},busy=state.loading||state.saving;
       const changed=current&&Object.keys(current.values).some(key=>current.values[key]!==draft[key]);
+      useEffect(()=>{
+        if(operation?.state==='completed'&&[engine,'Controller'].includes(operation.service))void editor.reload({cleanOnly:true});
+      },[editor,engine,operation?.requestId,operation?.state,operation?.service]);
       const service=serviceRows(lifecycle.value).find(item=>item.id===engine);
       const lifecycleBusy=lifecycle.posting||lifecycle.uncertain||Boolean(lifecycle.pending)||operationBusy(operation);
       const locale=t('tuning.locale');

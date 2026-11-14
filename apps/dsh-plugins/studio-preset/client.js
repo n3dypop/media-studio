@@ -5,6 +5,7 @@ window.__ModuleLoader__.load({
     const {createElement:h}=require('react');
     const legacyPresets=new Set(['local-workflow-development','local-image-generation']);
     function studioSeatState(state){
+      if(!state.options.some(option=>option.id==='local-image'))return state;
       return{...state,current:legacyPresets.has(state.current)?'local-image':state.current,
         options:state.options.filter(option=>!legacyPresets.has(option.id)).map(option=>option.id==='local-image'?{...option,name:'media-studio'}:option)};
     }

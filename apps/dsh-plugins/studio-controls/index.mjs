@@ -1,5 +1,5 @@
-import {readFile} from 'node:fs/promises';
-import {createRuntimeConfig,runtimeRootUrl} from '../shared/plugin-config.mjs';
+import {createRuntimeConfig} from '../shared/plugin-config.mjs';
+import {createControllerRequest} from '../shared/controller-request.mjs';
 import {ACTIONS_PATH,actionsHandler} from './actions.mjs';
 import {controllerSessionMode,controllerSessionId,withControllerSessionNamespace} from '../shared/controller-session.mjs';
 import {createHostDesktopRequestTrust,registerDesktopProof} from '../shared/desktop-request-trust.mjs';
@@ -49,16 +49,11 @@ export async function planningReceiptFromHost({agents,sessionQuery},sessionId,re
 export async function apply(ctx,config){
   const sessionMode=controllerSessionMode(config);
   if(sessionMode==='desktop')desktopPackagedRuntimeOption({desktopPackagedRuntime:true});
-  const root=runtimeRootUrl(config);
-  const configuration=JSON.parse(await readFile(new URL('config/controller.json',root),'utf8'));
-  if(!Number.isInteger(configuration.port))throw new Error('Invalid managed controller port.');
-  const controllerOrigin=`http://127.0.0.1:${configuration.port}`;
+  const request=await createControllerRequest(config,{admin:true,timeoutMs:15000});
   const dshOrigin=()=>localHostOrigin(ctx.webServer);
   const trust=sessionMode==='desktop'?createHostDesktopRequestTrust(dshOrigin):null;
-  const controllerRequest=async(path,{method='GET',body,signal}={})=>{
-    const token=(await readFile(new URL('data/controller/auth-token',root),'utf8')).trim();
-    if(!/^[a-f0-9]{64}$/.test(token)||!path.startsWith('/api/'))throw new Error('Controller authentication unavailable.');
-    const response=await fetch(controllerOrigin+path,{method,headers:{Authorization:`Bearer ${token}`,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{}),signal:signal?AbortSignal.any([signal,AbortSignal.timeout(15000)]):AbortSignal.timeout(15000),redirect:'error'});
+  const controllerRequest=async(path,options)=>{
+    const response=await request(path,options);
     const value=await response.json();
     if(!response.ok)throw Object.assign(new Error(typeof value.error==='string'?value.error:'Controller request failed.'),{status:response.status});
     return value;
