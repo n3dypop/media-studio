@@ -64,5 +64,5 @@ capability negotiation and tests covering supported client/backend combinations.
 Until those exist, splitting source would add synchronization requirements
 without separating the runtime process or reducing its resource use.
 
-See [configuration](configuration.md), [capability extension](extensions.md)
+See [configuration](configuration.md), [agent roles and capability handoff](extensions.md)
 and the [native build and installation procedure](native-probe.md).

@@ -4,6 +4,8 @@ import {readFile,lstat,readdir} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {pathToFileURL} from 'node:url';
+import {runInNewContext} from 'node:vm';
+import {AGENT_ROLES,guideForRole} from '../apps/dsh-plugins/local-genai/roles.mjs';
 import {checkPackage,pluginSets} from '../scripts/check-package.mjs';
 
 const root=resolve(import.meta.dirname,'..');
@@ -55,10 +57,21 @@ test('media tools and Skills are Agent-preset children while provider examples r
   const preset=one('preset-local-image'),managed=one('local-genai');
   assert.match(preset.body,/name: ['"]?@deepseek-ai\/dsh-agent-preset['"]?\s*$/m);
   assert.match(preset.body,new RegExp('^ {'+(preset.indent+4)+'}id: local-image\\s*$','m'));
-  assert.match(preset.body,new RegExp('^ {'+(preset.indent+4)+'}name: media-studio\\s*$','m'));
+  assert.match(preset.body,new RegExp('^ {'+(preset.indent+4)+'}name: ' + AGENT_ROLES.studio.name + '\\s*$','m'));
   assert.match(preset.body,new RegExp('^ {'+(preset.indent+2)+'}disabled: true\\s*$','m'));
   assert.ok(managed.indent>preset.indent);assert.ok(preset.body.includes(managed.body));
   assert.match(managed.body,/^\s*role: studio\s*$/m);assert.match(managed.body,/^\s*controllerUrl: http:\/\/127\.0\.0\.1:\d+\s*$/m);assert.match(managed.body,/^\s*tokenFile: data\/controller\/dsh-token\s*$/m);
+  const maintenance=one('preset-comfy-maintenance');
+  assert.equal(maintenance.indent,preset.indent);
+  assert.match(maintenance.body,/^\s*id: comfy-maintenance$/m);
+  assert.match(maintenance.body,/^\s*name: ComfyUI Maintenance$/m);
+  assert.match(maintenance.body,/^\s*disabled: true$/m);
+  assert.match(maintenance.body,/You are ComfyUI Maintenance/);
+  assert.match(maintenance.body,/statically validate|validate a workflow without running it/);
+  assert.match(maintenance.body,/name: '@deepseek-ai\/dsh-mcp-client'/);
+  assert.doesNotMatch(maintenance.body,/local-genai|media-studio-skill/);
+  assert.doesNotMatch(preset.body,/dsh-mcp-client/);
+  assert.match(guideForRole('studio'),/^You are Media Studio\./);
   assert.equal(one('local-genai-gateway').indent,preset.indent);
   assert.match(one('local-ask-user').body,/@deepseek-ai\/dsh-tool-ask-user/);
   const compaction=one('media-studio-compaction'),skills=one('media-studio-skills');
@@ -67,4 +80,23 @@ test('media tools and Skills are Agent-preset children while provider examples r
   for(const match of bundle.matchAll(/^\s*name: (\.\/[^\s]+)\s*$/gm))assert.equal((await lstat(resolve(root,match[1]))).isFile(),true,match[1]);
   const provider=await text('examples/model-provider.patch.example.yml');
   assert.match(provider,/^\s*local-strata:\s*$/m);assert.match(provider,/^\s*- id: strata-core\s*$/m);assert.match(provider,/^\s*displayName: Strata\s*$/m);assert.match(provider,/^\s*apiKeyEnv: LOCAL_GENAI_DSH_TOKEN\s*$/m);assert.match(provider,/http:\/\/127\.0\.0\.1:\d+\/v1/);assert.doesNotMatch(provider,/^\s*apiKey:\s*\S+/m);
+});
+
+test('preset picker keeps native production and maintenance labels and filters legacy IDs',async()=>{
+  let registration;
+  runInNewContext(await text('apps/dsh-plugins/studio-preset/client.js'),{
+    window:{__ModuleLoader__:{load:entry=>{registration=entry;}}},
+  });
+  const {studioSeatState}=registration.factory(()=>({}));
+  const options=[
+    {id:'local-image',name:'Media Studio'},
+    {id:'comfy-maintenance',name:'ComfyUI Maintenance'},
+    {id:'local-workflow-development',name:'Legacy workflow (compatibility)'},
+    {id:'local-image-generation',name:'Legacy image (compatibility)'},
+  ];
+  const production=studioSeatState({current:'local-image-generation',options});
+  assert.equal(production.current,'local-image');
+  assert.deepEqual(production.options,options.slice(0,2));
+  const maintenance=studioSeatState({current:'comfy-maintenance',options});
+  assert.equal(maintenance.current,'comfy-maintenance');
 });

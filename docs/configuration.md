@@ -173,7 +173,7 @@ It is disabled unless explicitly configured in the private runtime.
 
 The bundle defines `preset-local-image` using the native
 `@deepseek-ai/dsh-agent-preset` composition. The preset's durable ID is
-`local-image` and its display name is **media-studio**. `local-genai` belongs
+`local-image` and its display name is **Media Studio**. `local-genai` belongs
 inside `config.plugins` of this preset because its tools and instructions are
 Agent-scoped. It refuses Host-root registration. Clarification, isolated basic
 compaction and the isolated Skill registry/source/tool are declared beside it.
@@ -217,9 +217,9 @@ Configure a private deployment in this order:
    `local-genai` row, then enable the configured gateway and desired media UI
    entries. Disabled ancestors intentionally keep their children inactive.
    Enable the generic Host entry only with the required Media Studio policy.
-6. In a new conversation select **media-studio**, then **Strata** and the actual
+6. In a new conversation select **Media Studio**, then **Strata** and the actual
    model display name. Provider configuration and selecting a preset are separate
-   operations. The example does not change an existing conversation's model or
+   operations. The example preserves the existing conversation's model and
    the user's global default preset.
 
 All local module references in the bundle, including preset children, are

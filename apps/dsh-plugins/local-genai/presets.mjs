@@ -1,20 +1,28 @@
 import { AGENT_ROLES } from './roles.mjs';
-const presetDisplayName=id=>Object.values(AGENT_ROLES).find(role=>role.presetId===id)?.name;
+const productionPresets = ['studio', 'workflow-development', 'image-generation'].map(role => AGENT_ROLES[role]);
 
-// Display-only cleanup. Keep durable identities and their complete compositions
-// so existing sessions can still resume under the preset they recorded.
-export function tidyStudioPresetDisplays(patch) {
+function findPreset(rows, id) {
+  const matches = rows.filter(row => row.name === '@deepseek-ai/dsh-agent-preset' && row.config?.id === id);
+  if (matches.length !== 1) throw new Error(`Exactly one ${id} preset is required.`);
+  return matches[0];
+}
+
+function renameDisplayPatch(patch, { requireStudio = false } = {}) {
+  if (!Array.isArray(patch)) throw new Error('A profile patch array is required.');
   const result = structuredClone(patch);
-  if (!Array.isArray(result)) throw new Error('A profile patch array is required.');
   const rows = result.flatMap(row => row.insert ?? [row]);
-  const names = { 'local-image': 'media-studio', 'local-workflow-development': 'Legacy workflow (compatibility)', 'local-image-generation': 'Legacy image (compatibility)' };
-  for (const [id, name] of Object.entries(names)) {
-    const matches = rows.filter(row => row.name === '@deepseek-ai/dsh-agent-preset' && row.config?.id === id);
-    if (matches.length !== 1 || matches[0].config.plugins?.find(plugin => plugin.id === 'local-genai')?.config?.role !== 'studio') throw new Error(`Exactly one migrated preset ${id} is required.`);
-    matches[0].config.name = name;
+  for (const { presetId, name } of productionPresets) {
+    const preset = findPreset(rows, presetId);
+    if (requireStudio && preset.config.plugins?.find(plugin => plugin.id === 'local-genai')?.config?.role !== 'studio') {
+      throw new Error(`Preset ${presetId} is not a migrated media-studio preset.`);
+    }
+    preset.config.name = name;
   }
   return result;
 }
+
+// Retain existing callers and change only display names on migrated profiles.
+export const tidyStudioPresetDisplays = renameStudioPresetDisplays;
 
 // Preserve the deployed route, credential reference and isolated compaction
 // configuration. The legacy preset itself is never modified by this builder.
@@ -41,30 +49,11 @@ export function dedicatedPresetRows(legacy) {
 }
 
 export function renamePresetDisplays(patch) {
-  if (!Array.isArray(patch)) throw new Error('A profile patch array is required.');
-  const result = structuredClone(patch);
-  const rows = result.flatMap(row => row.insert ?? [row]);
-  for (const { presetId, name } of ['integrated', 'workflow-development', 'image-generation'].map(role => AGENT_ROLES[role])) {
-    const matches = rows.filter(row => row.name === '@deepseek-ai/dsh-agent-preset' && row.config?.id === presetId);
-    if (matches.length !== 1) throw new Error(`Exactly one ${presetId} preset is required for a name-only update.`);
-    matches[0].config.name = name;
-  }
-  return result;
+  return renameDisplayPatch(patch);
 }
 
-// Update an already-migrated profile without re-adding its isolated skill group.
-// Durable preset IDs, plugin settings and compaction remain byte-for-byte equivalent.
 export function renameStudioPresetDisplays(patch) {
-  if (!Array.isArray(patch)) throw new Error('A profile patch array is required.');
-  const result = structuredClone(patch);
-  const rows = result.flatMap(row => row.insert ?? [row]);
-  for (const id of ['local-image', 'local-workflow-development', 'local-image-generation']) {
-    const matches = rows.filter(row => row.name === '@deepseek-ai/dsh-agent-preset' && row.config?.id === id);
-    if (matches.length !== 1) throw new Error(`Exactly one ${id} media-studio preset is required.`);
-    if (matches[0].config.plugins?.find(plugin => plugin.id === 'local-genai')?.config?.role !== 'studio') throw new Error(`Preset ${id} is not a migrated media-studio preset.`);
-    matches[0].config.name = presetDisplayName(id);
-  }
-  return result;
+  return renameDisplayPatch(patch, { requireStudio: true });
 }
 
 // These Cordis row IDs are configuration identities, not session preset IDs.
@@ -94,19 +83,17 @@ export function renameStudioSkillIds(patch) {
 }
 
 // Keep the three durable identities so old conversations still compose. The
-// pinned registry has no hidden-preset contract; only media-studio is the default.
+// pinned registry has no hidden-preset contract; Media Studio is the default.
 export function studioPresetPatch(patch) {
   const result = structuredClone(patch);
   const rows = result.flatMap(row => row.insert ?? [row]);
-  for (const id of ['local-image', 'local-workflow-development', 'local-image-generation']) {
-    const matches = rows.filter(row => row.name === '@deepseek-ai/dsh-agent-preset' && row.config?.id === id);
-    if (matches.length !== 1) throw new Error(`Exactly one ${id} preset is required for media-studio migration.`);
-    const row = matches[0];
+  for (const { presetId: id, name } of productionPresets) {
+    const row = findPreset(rows, id);
     const native = row.config.plugins.find(item => item.id === 'local-genai');
     if (!native?.config || !native.config.workspaceRoot) throw new Error('A managed plugin workspace is required.');
     native.config.role = 'studio';
-    row.config.name = presetDisplayName(id);
-    row.config.description = '画像生成・画像内容編集・拡大・動画とComfyUIワークフロー開発を、利用可能なモデルと手順から選ぶ';
+    row.config.name = name;
+    row.config.description = '登録済みのComfyUIワークフローを使い、制作・返却・評価を行う';
     row.config.order = id === 'local-image' ? 0 : id === 'local-workflow-development' ? 90 : 100;
     if (row.config.plugins.some(item => ['studio-skills', 'studio-skill-tool', 'image-studio-skills', 'image-studio-skill-tool', 'media-studio-skills', 'media-studio-skill-tool'].includes(item.id))) throw new Error('media-studio skills are already configured.');
     const skillSource = native.name.replace(/\/index\.mjs$/, '/skills.mjs');

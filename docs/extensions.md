@@ -1,10 +1,17 @@
 # Adding a model, node or workflow
 
-Media Studio selects approved templates and adjusts their exposed settings.
-The user or a separate maintenance agent owns new workflows, topology changes,
-asset installation and registration. The standalone library lists editable UI
-workflows. The managed catalog lists model/operation pairs that Controller can
-admit for execution from Media Studio.
+| Role | Scope | Result |
+| --- | --- | --- |
+| **Media Studio** (`local-image`) | Plan production, select a registered workflow and operation, and adjust exposed settings through Controller. | Actual media, run record, review and iteration. |
+| **ComfyUI Maintenance** (`comfy-maintenance`) | Find installed local nodes, edit values or links in an existing workflow draft, and statically validate it. | Draft ID, changes and validation findings. |
+| **User or external maintainer** | Build graphs, install models or custom nodes, run GPU tests and register managed profiles. | Updated catalog and tested workflow with version, evidence and rollback instructions. |
+
+Media Studio can explain the requirements of a registered standalone template.
+To execute the requested workflow from DSH, the exact workflow and operation
+must appear in the live managed catalog. When a request needs maintenance,
+pass the workflow ID or relative path, model, operation, ordered inputs, expected
+output and fixed constraints. Include observed gaps and acceptance checks.
+If a maintenance draft exists, include its ID and validation findings.
 
 Use this handoff sequence:
 
@@ -52,7 +59,7 @@ Missing capabilities should produce a useful handoff, not an invented execution.
    updating Controller and the DSH plugin together. `unavailableDshProfile`
    exposes an unresolved mapping. Check its ID, operation, assets and permitted
    node schema before claiming DSH availability.
-5. Use **Add to prompt** in a `media-studio` conversation. Confirm the exact
+5. Use **Add to prompt** in a **Media Studio** conversation. Confirm the exact
    profile and operation in the draft. For acceptance, send a minimal request
    with an expected size and owned inputs, then verify the actual attachment,
    evaluation, resource recovery and provenance. Record which Host and model
@@ -152,9 +159,9 @@ existing private draft directory. Select the local Strata model in DSH.
 
 The preset lists three tools. Search returns local node names. Edits accept
 paths relative to ComfyUI's Workflows folder and save copies under a returned
-draft ID. Validate the draft using that ID. Recover the editable JSON from the
-draft directory. To deploy a draft for production, follow the profile handoff
-above.
+draft ID. Validate the draft using that ID and recover the JSON from the draft directory.
+To deploy the draft for production, complete the managed profile checklist
+above. Then choose Media Studio and use the registered catalog entry.
 
 For video, representative frames provide only partial visual evidence. They do
 not establish full motion continuity, sound, identity consistency or every frame's

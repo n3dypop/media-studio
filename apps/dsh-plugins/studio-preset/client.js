@@ -7,7 +7,7 @@ window.__ModuleLoader__.load({
     function studioSeatState(state){
       if(!state.options.some(option=>option.id==='local-image'))return state;
       return{...state,current:legacyPresets.has(state.current)?'local-image':state.current,
-        options:state.options.filter(option=>!legacyPresets.has(option.id)).map(option=>option.id==='local-image'?{...option,name:'media-studio'}:option)};
+        options:state.options.filter(option=>!legacyPresets.has(option.id))};
     }
     // Reuse the official component, store hooks and selection callback. Only the
     // two known compatibility ids are removed from this new-session picker.

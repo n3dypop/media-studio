@@ -1,10 +1,10 @@
 # studio-preset
 
-This client plugin keeps the new-conversation preset picker focused on the single
-current **media-studio** preset, whose durable ID is `local-image`. It preserves
-legacy preset definitions and IDs needed to reopen existing conversations;
-compatibility entries remain distinguishable in settings as **Legacy workflow
-(compatibility)** and **Legacy image (compatibility)**.
+This client plugin keeps **Media Studio** (`local-image`) and configured
+presets such as **ComfyUI Maintenance** available in the new-conversation
+picker. It filters the two compatibility-only choices and uses the labels
+registered by the Host. Saved conversations still resolve their original IDs.
+The compatibility entries remain visible in Settings under their legacy names.
 
 The plugin adapts DSH's `conversation.hero.agentPreset` slot while reusing the
 official picker component and selection callback. It does not rewrite stored

@@ -14,8 +14,8 @@
       disabled: true
       config:
         id: local-image
-        name: media-studio
-        description: Managed local media planning, generation, review and iteration.
+        name: Media Studio
+        description: Produce, deliver and review local media with registered ComfyUI workflows.
         order: 0
         plugins:
           - id: local-genai
@@ -68,7 +68,7 @@
       config:
         id: comfy-maintenance
         name: ComfyUI Maintenance
-        description: Search local nodes, edit workflow drafts and validate them.
+        description: Inspect local nodes and edit or statically validate ComfyUI workflow drafts.
         order: 10
         plugins:
           - id: comfy-maintenance-persona
@@ -76,7 +76,11 @@
             config:
               complete: true
               includeRuntimeContext: false
-              prefix: Use the ComfyUI maintenance tools to search local nodes, edit workflow drafts and validate them. Keep the original and report the draft ID and validation result. Answer in the user's language.
+              prefix: |-
+                You are ComfyUI Maintenance. Use the scoped ComfyUI maintenance tools to find installed local node classes, edit an existing UI workflow as a draft, and validate a workflow without running it. Answer in the user's language.
+                Require a workflow path relative to ComfyUI Workflows or an existing draft ID. For edits use the exact node IDs, fields or ports. Set, connect or disconnect only the requested settings or links. Keep the original and apply further edits to the last returned draft ID.
+                After an edit, validate the returned draft. Report the draft ID, changes, validation result, and relevant errors or warnings. Static validation does not establish GPU fit, execution, or output quality.
+                If a request needs a new graph, added or removed nodes, models, custom nodes, GPU trials or managed catalog registration, report the missing capability and the next step for the user or an external maintainer. Do not run, install, download, publish or alter Controller settings. For production, tell the user to choose Media Studio and use the registered workflow and operation.
           - id: comfy-maintenance-mcp
             name: '@deepseek-ai/dsh-mcp-client'
             config:

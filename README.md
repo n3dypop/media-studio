@@ -18,7 +18,7 @@ Media Studio includes six integration plugins:
 | `media-results` | Verified generation results and saved media delivery. |
 | `studio-controls` | Explicit search approvals and production decisions. |
 | `studio-monitor` | Media & Resources and Catalog for production state, Strata, and workflow discovery. |
-| `studio-preset` | One current media-studio preset, with legacy compatibility. |
+| `studio-preset` | Keeps production and maintenance visible in the picker and retains saved legacy sessions. |
 | `studio-services` | Managed service lifecycle, resource release and launch paths. |
 
 Generic appearance, session management, image viewing and DSH host restart are
@@ -110,7 +110,7 @@ module URLs and explicit `runtimeRoot` values. Use the matching Media Studio
 policy for DSH host restart. The generic and media bundles must not both register
 an old and a new copy of a plugin.
 
-The bundle declares the **media-studio** Agent preset with durable ID
+The bundle declares the **Media Studio** Agent preset with durable ID
 `local-image`. Its managed tools, clarification, isolated compaction and six
 Skills are nested under that preset; `local-genai` must never be mounted at the
 Host root. The gateway and media UI plugins stay on the Host. All integration
@@ -121,19 +121,21 @@ UI entries. See [configuration](docs/configuration.md) for the complete sequence
 
 ## Use
 
-Start DSH through the configured managed launcher and select **media-studio**.
+Start DSH through the configured managed launcher and select **Media Studio**.
 Describe the requested image, intended use, explicit model and required output.
 For attached images, distinguish references to inspect from images to feed into
 the generator. Editing requests should state what to preserve and what to change.
 
-The agent uses six Skills as needed: `generation-plan`,
-`comfyui-workflow-build`, `comfyui-generate`, `output-review`,
-`generation-iterate` and `resource-control`. The live catalog determines which
-models, modes and inputs are actually available. A template or Skill alone is
-not evidence that an installed model can execute it. The production preset
-selects approved templates and adjusts their exposed settings. Use the
-[extension handoff](docs/extensions.md) when a request needs a new template,
-model, custom node, or graph connection.
+**Media Studio** plans and runs registered workflows, adjusts their exposed
+settings, delivers actual output and records review and iteration. Its six
+Skills cover planning, template preparation, execution, review, iteration and
+resource control. Availability comes from the live managed catalog.
+
+For node lookup, edits to an existing workflow draft and static validation,
+select **ComfyUI Maintenance** if it is configured. It returns a draft ID
+and validation findings. The user or an external maintainer installs assets,
+builds graphs and registers managed profiles. See the
+[role and handoff guide](docs/extensions.md) for the transition back to production.
 
 Generated images appear in the conversation and can be reopened from the saved
 run. Use **Save original PNG** on the result card for the full artifact. The
