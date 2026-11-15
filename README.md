@@ -146,7 +146,9 @@ dependencies, DSH availability, resource estimates and execution warnings.
 Not-recommended workflows are sorted to the end, across pages. Use
 **Add to prompt** to draft a request for the selected workflow. For a managed
 workflow with a warning, confirm the same settings before it runs. Settings contain launch paths and
-managed Start, Stop, Restart and model-resource release operations. The
+managed Start, Stop, Restart and model-resource release operations under
+**Settings → Controller**. Use **Settings → Media Studio** to set when the
+right panes open and where they appear. The
 **Strata** and **ComfyUI** settings pages show installed versions and let you
 check official releases and apply an eligible update. Stop the target and the
 Controller before applying. Strata uses its signed feed for engine updates and

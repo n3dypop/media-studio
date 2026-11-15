@@ -125,7 +125,7 @@ test('auto-open reacts to conversation selection without a header and skips supe
   });
   client.apply({
     effect:fn=>cleanups.push(fn()),locale:{register(){}},
-    slots:{inject(name,callback){if(name==='settings.general.item')callback();},register(slot,render){settings={slot,render};}},
+    slots:{inject(name,callback){if(name==='settings.section')callback();},register(slot,render){settings={slot,render};}},
     sidebarRightTabs:{register(){}},
     sidebarRight:{
       mounted:{getSnapshot:()=>mounted,subscribe:callback=>{listeners.add(callback);return()=>listeners.delete(callback);}},
@@ -137,7 +137,8 @@ test('auto-open reacts to conversation selection without a header and skips supe
   function paint(){const pending=[...frames.values()];frames.clear();for(const callback of pending)callback();}
   select('first');paint();paint();assert.deepEqual(opened,[]);
   const form=settings.render(settings.slot.inject());
-  form.children[2].children[1].props.onChange({target:{value:'both'}});
+  assert.equal(settings.slot.label,'Media Studio');
+  form.children.find(child=>child?.type==='label').children[1].props.onChange({target:{value:'both'}});
   assert.deepEqual(opened,[]);
   closeSettings();paint();select('new');paint();paint();
   assert.deepEqual(opened.splice(0),[
@@ -145,7 +146,7 @@ test('auto-open reacts to conversation selection without a header and skips supe
     {session:'new',kind:'studio-catalog',preferNewPane:true},
   ]);
   expanded=false;select(undefined);select('new');paint();paint();assert.deepEqual(opened,[]);
-  active=undefined;settings.render(settings.slot.inject()).children[2].children[1].props.onChange({target:{value:'catalog'}});
+  active=undefined;settings.render(settings.slot.inject()).children.find(child=>child?.type==='label').children[1].props.onChange({target:{value:'catalog'}});
   closeSettings();paint();paint();assert.deepEqual(opened.splice(0),[{session:'new',kind:'studio-catalog'}]);
   active=undefined;expanded=false;wide=false;select('narrow');paint();paint();assert.deepEqual(opened,[]);
   select('pending');for(const dispose of cleanups)dispose?.();paint();paint();

@@ -3,7 +3,7 @@ window.__ModuleLoader__.load({
   id:'local-studio-monitor',
   factory(require){
     const {createElement:h,useEffect,useRef,useState}=require('react');
-    const {Button}=require('@deepseek-ai/dsh-client-ui-primitives');
+    const {Button,IconLayersOutlineRegular}=require('@deepseek-ai/dsh-client-ui-primitives');
     const ID='local-studio-monitor',KIND='studio-monitor',CATALOG='studio-catalog',LOCALE='studio.catalog',CATALOG_TITLE='Catalog';
     const AUTO_KEY='studio-monitor.auto-open.v1',PANE_KEY='studio-monitor.pane-preferences.v1';
     const openModes=['manual','resources','catalog','both'];
@@ -64,12 +64,12 @@ window.__ModuleLoader__.load({
           setPreferences(next);setError(false);
         }catch{setError(true);}
       }
-      const select=(key,choices,disabled=false)=>h('label',null,t(key),h('select',{value:preferences[key],disabled,onChange:event=>change(key,event.target.value)},
+      const select=(key,choices,disabled=false)=>h('label',null,h('span',null,t(key)),h('select',{value:preferences[key],disabled,onChange:event=>change(key,event.target.value)},
         ...choices.map(choice=>h('option',{key:choice,value:choice},t(choice)))));
       return h('section',{className:'sm-pane-settings','data-studio-pane-settings':true},
-        h('style',null,'.sm-pane-settings{display:grid;gap:12px;margin-block:12px}.sm-pane-settings h3,.sm-pane-settings p{margin:0}.sm-pane-settings label{display:grid;gap:5px;font-size:13px}.sm-pane-settings select{width:100%;padding:7px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:inherit;font:inherit}.sm-pane-settings p{font-size:12px;color:var(--dsw-alias-label-secondary)}'),
-        h('h3',null,t('paneTitle')),select('open',openModes),select('placement',placements,preferences.open!=='both'),
-        h('p',null,t('paneHelp')),error?h('p',{role:'alert'},t('paneSaveError')):null);
+        h('style',null,'.sm-pane-settings{display:grid;gap:12px;color:var(--dsw-alias-label-primary)}.sm-pane-settings h3,.sm-pane-settings p{margin:0}.sm-pane-settings h2{font-size:18px;margin:0 0 12px;padding-bottom:12px;border-bottom:1px solid var(--dsw-alias-border-l1)}.sm-pane-settings label{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:13px}.sm-pane-settings select{max-width:60%;padding:8px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2));color:inherit;font:inherit}.sm-pane-settings p{font-size:12px;color:var(--dsw-alias-label-secondary)}'),
+        h('h2',null,'Media Studio'),h('h3',null,t('paneTitle')),h('p',null,t('paneHelp')),select('open',openModes),select('placement',placements,preferences.open!=='both'),
+        error?h('p',{role:'alert'},t('paneSaveError')):null);
     }
     function Icon({kind='activity',size=16}){
       const paths={activity:'M3 12h4l3-8 4 16 3-8h4',chip:'M8 8h8v8H8zM9 3v3m6-3v3m-6 12v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3',image:'M4 4h16v16H4zM4 16l5-5 4 4 3-3 4 4M15 8h.01',layers:'m12 3 9 5-9 5-9-5 9-5zm-9 9 9 5 9-5M3 16l9 5 9-5',check:'m5 12 4 4L19 6'};
@@ -420,7 +420,8 @@ window.__ModuleLoader__.load({
       };
       ctx.effect(()=>ctx.sidebarRightTabs.register({id:ID,kind:KIND,keepMounted:true,title:()=> 'Media & Resources',guide:[{id:ID,order:20,title:()=> 'Media & Resources',description:()=> 'Strata・ComfyUIの資源と、この会話の制作工程',icon:Icon}]}));
       ctx.effect(()=>ctx.locale.register(LOCALE,dictionaries));
-      ctx.slots.inject('settings.general.item',()=>ctx.slots.register({name:'settings.general.item',id:'studio-monitor-panes',order:15,locale:LOCALE,inject:()=>({onPreferencesChanged:considerAuto})},PaneSettings));
+      ctx.slots.inject('settings.section',()=>ctx.slots.register({name:'settings.section',id:'studio-monitor-panes',label:'Media Studio',order:39,locale:LOCALE,inject:()=>({onPreferencesChanged:considerAuto})},PaneSettings));
+      ctx.slots.inject('settings.section.icon',()=>ctx.slots.register({name:'settings.section.icon',id:'studio-monitor-panes'},props=>h(IconLayersOutlineRegular,{size:props.size,'aria-hidden':true})));
       ctx.effect(()=>ctx.sidebarRightTabs.register({id:CATALOG,kind:CATALOG,title:()=>CATALOG_TITLE,
         guide:[{id:CATALOG,order:21,title:()=>CATALOG_TITLE,description:()=>ctx.locale.bind(LOCALE)('description'),icon:()=>h(Icon,{kind:'layers'})}]}));
       const summary=id=>ctx.sessions.list.getSnapshot().byId[id];

@@ -3,7 +3,7 @@ window.__ModuleLoader__.load({
   id:'studio-services',
   factory(require){
     const {createElement:h,useEffect,useState,useSyncExternalStore}=require('react');
-    const {Button}=require('@deepseek-ai/dsh-client-ui-primitives');
+    const {Button,IconClockOutlineRegular,IconLayersOutlineRegular,IconSettingsOutlineRegular}=require('@deepseek-ai/dsh-client-ui-primitives');
     const PATH='/api/local-studio/services',PENDING_KEY='studio-services.pending.v1';
     const SERVICES=['Strata','ComfyUI','Controller'],ACTIONS=['start','stop','restart','unload'];
     const SETTINGS_PATH='/api/local-studio/service-settings';
@@ -77,6 +77,14 @@ window.__ModuleLoader__.load({
       .ss-path-editor{margin-top:16px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l1)}.ss-path-editor h4{font-size:13px;font-weight:650;margin:0 0 8px}.ss-path-field{display:grid;gap:5px;margin:12px 0;font-size:11px;color:var(--dsw-alias-label-secondary)}.ss-path-field input{width:100%;min-width:0;box-sizing:border-box;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px}.ss-path-field input:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:2px}.ss-path-field input:disabled{opacity:.65}
       .ss-path-field select{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px}
       .ss-tuning-section{padding:10px 0;border-top:1px solid var(--dsw-alias-border-l2)}.ss-tuning-section>summary{cursor:pointer;font-weight:600}.ss-toggle{display:flex;align-items:center;gap:8px;margin:12px 0}
+      .ss-settings{background:none;border:0;padding:0;font-size:13px}.ss-settings .ss-heading{padding:0 0 12px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+      .ss-settings .ss-heading h3{font-size:18px}.ss-settings .ss-muted{font-size:12px}.ss-settings .ss-service{background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2))}
+      .ss-engine-card{display:grid;gap:9px;padding:15px;margin:14px 0;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2))}
+      .ss-engine-card dl{margin:0;display:flex;gap:12px 24px;flex-wrap:wrap;align-items:center}.ss-engine-card dt{color:var(--dsw-alias-label-secondary);font-size:11px}.ss-engine-card dd{margin:2px 0 0;font-size:14px;font-weight:620;font-variant-numeric:tabular-nums}
+      .ss-engine-section h4{font-size:13px;margin:0 0 5px}.ss-engine-section{margin:16px 0}.ss-field{display:flex;justify-content:space-between;align-items:center;gap:10px 16px;padding:10px 0;margin:0;border-bottom:1px solid var(--dsw-alias-border-l1);font-size:13px;color:var(--dsw-alias-label-primary)}
+      .ss-field :is(input[type=number],select){width:min(45%,12rem);background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2));font-size:13px}
+      .ss-settings .ss-tuning-section{padding:13px 0}.ss-settings .ss-buttons{gap:8px}.ss-settings .ss-engine-actions{justify-content:flex-end;border-top:1px solid var(--dsw-alias-border-l1);padding-top:12px;margin-top:14px}
+      @media(max-width:560px){.ss-field{align-items:flex-start;flex-direction:column}.ss-field :is(input[type=number],select){width:100%}}
     `;
     const operationState=operation=>operation?.state??operation?.phase??operation?.status??null;
     const operationBusy=operation=>Boolean(operation&&!terminal.has(operationState(operation)));
@@ -273,31 +281,35 @@ window.__ModuleLoader__.load({
       const renderField=field=>{
         const label=locale==='ja'?field.ja:field.en;
         const props={'aria-label':label,disabled:!editable(field)};
-        if(field.checkbox)return h('label',{key:field.id,className:'ss-toggle'},
-          h('input',{...props,type:'checkbox',checked:draft[field.id]===true,onChange:e=>editor.change(field.id,e.target.checked)}),h('span',null,label));
+        if(field.checkbox)return h('label',{key:field.id,className:'ss-field'},
+          h('span',null,label),h('input',{...props,type:'checkbox',checked:draft[field.id]===true,onChange:e=>editor.change(field.id,e.target.checked)}));
         const input={...props,value:draft[field.id]??'',onChange:e=>editor.change(field.id,e.target.value===''
           ?(field.optional?null:''):field.choices?e.target.value:e.target.valueAsNumber)};
-        return h('label',{key:field.id,className:'ss-path-field'},h('span',null,label),field.choices
+        return h('label',{key:field.id,className:'ss-path-field ss-field'},h('span',null,label),field.choices
           ?h('select',input,field.optional?h('option',{value:''},t('tuning.default')):null,
             ...field.choices.map(value=>h('option',{key:value,value},en['tuning.option.'+value]?t('tuning.option.'+value):value)))
           :h('input',{...input,type:'number',min:field.min,max:field.max,step:field.step,placeholder:field.optional?t('tuning.default'):undefined}));
       };
       return h('section',{className:'studio-services ss-settings','data-engine-settings':engine},h('style',null,css),
         h('header',{className:'ss-heading'},h('h3',null,engine),h(Button,{type:'button',size:'sm',variant:'outline',disabled:busy,onClick:()=>void editor.reload()},t('refresh'))),
-        h('p',{className:'ss-muted'},current?.version?`${phrase('現在のバージョン','Installed version')} ${current.version.installed}${current.version.control?` · Control ${current.version.control}`:''}`:phrase('バージョン取得不可','Version unavailable')),
+        h('section',{className:'ss-engine-card','aria-label':phrase('バージョンと状態','Version and status')},
+        h('dl',null,h('div',null,h('dt',null,phrase('現在のバージョン','Installed version')),h('dd',null,current?.version?.installed??'—')),
+          current?.version?.control?h('div',null,h('dt',null,'Control'),h('dd',null,current.version.control)):null,
+          h('div',null,h('dt',null,phrase('サービス','Service')),h('dd',null,h('span',{className:'ss-state','data-state':service.state},phrase(stateNames[service.state]??'確認できません',({running:'Running',ready:'Running',stopped:'Stopped',starting:'Starting',stopping:'Stopping'})[service.state]??'Unavailable'))))),
+        h('p',{className:'ss-muted',role:'status'},t(!current?'paths.loading':current.state==='stopped'?'tuning.stopped':running)),
         h('div',{className:'ss-buttons'},h(Button,{type:'button',size:'sm',variant:'outline',disabled:checking||lifecycleBusy,onClick:()=>void checkUpdate()},checking?phrase('確認中…','Checking…'):phrase('アップデートを確認','Check for updates')),
           h(Button,{type:'button',size:'sm',variant:'outline',disabled:!offer?.canUpdate||checking||changed||state.uncertain||lifecycleBusy||service.state!=='stopped'||serviceRows(lifecycle.value).find(item=>item.id==='Controller')?.state!=='stopped',onClick:async()=>{if(offer?.canUpdate&&await controller.act(engine,'update',offer.identity))setOffer(null);}},offer?.canUpdate?`${phrase('アップデート','Update')} ${offer.available}`:phrase('アップデート','Update'))),
         offer?h('p',{className:'ss-muted ss-detail',role:'status'},offer.canUpdate?phrase('更新には対象サービスとControllerの停止が必要です。','Stop this service and Controller before updating.'):offer.available?`${phrase('配布版','Available release')} ${offer.available} · ${phrase('適用できる更新はありません','No applicable update')}`:phrase('互換アップデートがありません。','No compatible update.')):null,
-        updateError?h('p',{className:'ss-notice',role:'alert'},updateError):null,
-        h('p',{className:'ss-muted',role:'status'},t(!current?'paths.loading':current.state==='stopped'?'tuning.stopped':running)),
-        h('p',{className:'ss-muted ss-detail'},t(engine==='Strata'?'tuning.contextHelp':'tuning.comfyHelp')),
-        ...engineFields[engine].map(renderField),
+        updateError?h('p',{className:'ss-notice',role:'alert'},updateError):null),
+        h('section',{className:'ss-engine-section'},h('h4',null,phrase('基本設定','General tuning')),
+          h('p',{className:'ss-muted'},t(engine==='Strata'?'tuning.contextHelp':'tuning.comfyHelp')),
+          ...engineFields[engine].map(renderField)),
         ...(engine==='Strata'&&Object.hasOwn(draft,'espEnabled')?strataAdvanced.map(({section,fields,help})=>
           h('details',{key:section,className:'ss-tuning-section'},h('summary',null,t(section)),
             help?h('p',{className:'ss-muted ss-detail'},t(help)):null,
             section==='tuning.esp'&&current?.values.espEnabled===null?h('p',{className:'ss-muted ss-detail'},t('tuning.espUnavailable')):null,
             ...fields.map(renderField))):[]),
-        h('div',{className:'ss-buttons'},
+        h('div',{className:'ss-buttons ss-engine-actions'},
           h(Button,{type:'button',size:'sm',variant:'primary',disabled:!changed||busy||lifecycleBusy||state.uncertain,onClick:()=>void editor.save()},t(state.saving?'paths.saving':'tuning.save')),
           h(Button,{type:'button',size:'sm',variant:'outline',disabled:changed||busy||lifecycleBusy||state.uncertain||!['stopped','running'].includes(service.state),
             onClick:()=>void controller.act(engine,service.state==='stopped'?'start':'restart')},t(service.state==='stopped'?'start':'restart'))),
@@ -323,7 +335,7 @@ window.__ModuleLoader__.load({
       const busy=state.posting||state.uncertain||Boolean(state.pending)||operationBusy(state.value?.operation);
       const rows=serviceRows(state.value);
       return h('section',{className:`studio-services${settings?' ss-settings':''}`,'data-studio-services':true,'aria-label':'Services'},h('style',null,css),
-        h('header',{className:'ss-heading'},h('h3',null,t('title')),h(Button,{type:'button',size:'sm',variant:'outline',disabled:state.loading,onClick:()=>void controller.refresh()},t(state.loading?'checking':state.uncertain?'checkReceipt':'refresh'))),
+        h('header',{className:'ss-heading'},h('h3',null,settings?'Controller':t('title')),h(Button,{type:'button',size:'sm',variant:'outline',disabled:state.loading,onClick:()=>void controller.refresh()},t(state.loading?'checking':state.uncertain?'checkReceipt':'refresh'))),
         h('p',{className:'ss-muted',style:{marginBottom:10}},'DSHから起動・停止します。処理中や所有状態が不明なサービスは保護されます。'),
         h('div',{className:'ss-list'},...rows.map(service=>h('article',{key:service.id,className:'ss-service','aria-label':`${service.id} service`},h('div',{className:'ss-row'},h('strong',null,service.id),h('span',{className:'ss-state','data-state':service.state},stateNames[service.state]??'確認できません')),
           service.detail?h('p',{className:'ss-muted ss-detail'},String(service.detail)):null,
@@ -340,12 +352,15 @@ window.__ModuleLoader__.load({
       ctx.effect(()=>ctx.locale.register('studio.services','en',en));
       ctx.effect(()=>ctx.locale.register('studio.services','ja',ja));
       ctx.slots.inject('studio.monitor.services',()=>ctx.slots.register({name:'studio.monitor.services',id:'studio-services',order:10,locale:'studio.services',inject:()=>({controller})},ServicesView));
-      ctx.slots.inject('settings.general.item',()=>ctx.slots.register({name:'settings.general.item',id:'studio-services-settings',order:14,locale:'studio.services',inject:()=>({controller,pathController,settings:true})},ServicesView));
+      ctx.slots.inject('settings.section',()=>ctx.slots.register({name:'settings.section',id:'studio-services-settings',order:38,label:'Controller',locale:'studio.services',inject:()=>({controller,pathController,settings:true})},ServicesView));
       for(const [index,engine] of ['Strata','ComfyUI'].entries()){
         const fields=[...engineFields[engine],...(engine==='Strata'?strataAdvanced.flatMap(group=>group.fields):[])];
         const editor=createSettingsController({request:(body,options)=>engineRequest(engine,body,options),fields:fields.map(field=>field.id)});
         ctx.effect(()=>()=>editor.dispose());
         ctx.slots.inject('settings.section',()=>ctx.slots.register({name:'settings.section',id:'studio-tuning-'+engine.toLowerCase(),order:36+index,label:()=>engine,locale:'studio.services',inject:()=>({controller,editor,engine})},EnginePage));
+      }
+      for(const [id,Icon] of [['studio-tuning-strata',IconClockOutlineRegular],['studio-tuning-comfyui',IconLayersOutlineRegular],['studio-services-settings',IconSettingsOutlineRegular]]){
+        ctx.slots.inject('settings.section.icon',()=>ctx.slots.register({name:'settings.section.icon',id},props=>h(Icon,{size:props.size,'aria-hidden':true})));
       }
     }
     return {inject:['slots','locale'],apply,ServicesView,Operation,Paths,createController,createSettingsController,settingsRequest,servicesRequest,serviceRows,operationState,operationBusy,en,ja};
