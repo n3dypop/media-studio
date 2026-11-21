@@ -226,3 +226,8 @@ All local module references in the bundle, including preset children, are
 relative to the root bundle file. Preserve that resolution base when installing;
 deployment tooling may replace them with absolute local file URLs. A profile
 snippet copied to a different folder needs its module URLs resolved again.
+
+DSH 0.2.2-rc.5 requires plugin manifests that explicitly admit that version.
+Update both the bundle and nested plugins together with the generic DSH plugins.
+The Session Library startup gate must be admitted before the storage and HTTP
+services that depend on it can start.
