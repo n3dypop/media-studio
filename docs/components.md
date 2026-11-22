@@ -66,3 +66,10 @@ without separating the runtime process or reducing its resource use.
 
 See [configuration](configuration.md), [agent roles and capability handoff](extensions.md)
 and the [native build and installation procedure](native-probe.md).
+
+Service status remains available before Controller starts. A stopped service with
+a saved runtime record is reported as stopped only after Windows confirms that
+its PID and TCP listener are absent; the record is retained. Failed observations
+keep lifecycle operations blocked. Running-service status shares Controller's
+configured native observer and receipt checks when enabled, without falling back
+after an observation or trust failure.

@@ -8,6 +8,7 @@ import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {createEpochVerifier,probeWindowsEpoch,validateEpochEvidence} from '../../controller/epoch.mjs';
 import {createStrataEpochVerifier} from '../../controller/strata-epoch.mjs';
+import {createConfiguredNativeProbe} from '../../controller/native-probe.mjs';
 import {runServiceCommand} from './service-command-runner.mjs';
 import {controllerNodeExecutable} from '../../controller/service-paths.mjs';
 import {loadSearchConfiguration} from '../../controller/search/config.mjs';
@@ -25,10 +26,18 @@ export async function probeStoppedService({pid,port},{execute=executeFile}={}){
   if(!Number.isSafeInteger(pid)||pid<1||pid>0xffffffff||!Number.isInteger(port)||port<1||port>65535)throw Error('Invalid stopped-process probe');
   const script=`$ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
-$first=Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction Stop
-$listeners=@(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object LocalPort -eq ${port})
-$last=Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}' -ErrorAction Stop
-[ordered]@{pidAbsent=($null -eq $first -and $null -eq $last);listenerCount=$listeners.Count}|ConvertTo-Json -Compress`;
+# These local .NET queries avoid loading the WMI and NetTCPIP providers on cold start.
+# Probe errors still abort; only ArgumentException from a missing PID means absent.
+function Test-TargetProcess {
+  $observed=$null
+  try { $observed=[Diagnostics.Process]::GetProcessById(${pid}); return $true }
+  catch [ArgumentException] { return $false }
+  finally { if($null -ne $observed){$observed.Dispose()} }
+}
+$first=Test-TargetProcess
+$listeners=@([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object Port -eq ${port})
+$last=Test-TargetProcess
+[ordered]@{pidAbsent=(-not $first -and -not $last);listenerCount=$listeners.Count}|ConvertTo-Json -Compress`;
   const powershell=win32.join(process.env.SystemRoot||'C:\\Windows','System32','WindowsPowerShell','v1.0','powershell.exe');
   const result=await execute(powershell,['-NoLogo','-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:8000,maxBuffer:65536,encoding:'utf8'});
   const value=JSON.parse(result.stdout.trim().replace(/^\uFEFF/,''));
@@ -85,12 +94,12 @@ async function portOpen(port){
 async function getJson(url,headers={}){const r=await fetch(url,{headers,redirect:'error',signal:AbortSignal.timeout(8000)});if(!r.ok)throw Error('Service response unavailable');return r.json();}
 function projectPath(root,relative){const path=resolve(root,relative);if(!path.startsWith(root+sep))throw Error('Path escapes project');return path;}
 
-export async function createSystemAdapter({root,probeStopped=probeStoppedService,checkPort=portOpen,hostOrigin}){
+export async function createSystemAdapter({root,probeStopped=probeStoppedService,checkPort=portOpen,hostOrigin,nativeProbeFactory=createConfiguredNativeProbe,probeEpoch=probeWindowsEpoch}){
   root=resolve(root);
   const programFiles=process.env.ProgramW6432??process.env.ProgramFiles;
   const standardPowerShell=programFiles&&win32.isAbsolute(programFiles)?join(programFiles,'PowerShell/7/pwsh.exe'):null;
   const powerShell=standardPowerShell&&(await lstat(standardPowerShell).catch(()=>null))?.isFile()?standardPowerShell:'pwsh.exe';
-  let environment,controller,strata,paths,descriptions;
+  let environment,controller,strata,paths,descriptions,epochObservation;
   let configurationDirty=true;
   async function loadConfiguration(){
   environment=await fileJson(join(root,'config/environment.json'));controller=await fileJson(join(root,'config/controller.json'));strata=await fileJson(join(root,'config/strata.json'));
@@ -102,9 +111,16 @@ export async function createSystemAdapter({root,probeStopped=probeStoppedService
   descriptions={Strata:{executable:strataExe,url:strata.baseUrl},ComfyUI:{executable:environment.comfyPythonExecutable,url:`http://127.0.0.1:${environment.comfyPort}`},Controller:{executable:node,url:`http://127.0.0.1:${controller.port}`}};
   for(const description of Object.values(descriptions)){const url=new URL(description.url);if(url.protocol!=='http:'||url.hostname!=='127.0.0.1'||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw Error('Unexpected service address');}
   paths={readOnly:true,Strata:{executable:strataExe,configuration:receipt?.config??join(root,'data/strata/serve-config.json')},ComfyUI:{directory:environment.comfyDirectory,executable:environment.comfyPythonExecutable},Controller:{entry:fileURLToPath(new URL('../../controller/server.mjs',import.meta.url)),executable:node},configurationFiles:['config/environment.json','config/controller.json','config/strata.json'].map(path=>join(root,path))};
+  epochObservation=undefined;
   configurationDirty=false;
   }
   await loadConfiguration();
+  async function observeEpoch(request){
+    // Share the configured, receipt-verified observer with Controller itself.
+    // An enabled helper failure must never fall back to a different observation.
+    const native=await (epochObservation??=Promise.resolve().then(()=>nativeProbeFactory(controller.nativeProbe,root)));
+    return native?native.epoch(request):probeEpoch(request);
+  }
   async function serviceStatus(id){
     const expected=descriptions[id],recordPath=join(root,'runtime',id+'.json');
     try{
@@ -117,9 +133,9 @@ export async function createSystemAdapter({root,probeStopped=probeStoppedService
         return {id,name:id,state:'unknown',detail:'管理記録はありますがプロセス終了と待受なしを証明できません。記録を保持しています。'};
       }
       let epoch;
-      if(id==='Strata')epoch=await createStrataEpochVerifier({root,expectedExecutable:expected.executable,baseUrl:expected.url})();
-      else if(id==='ComfyUI')epoch=await createEpochVerifier({runtimePath:recordPath,expectedExecutable:expected.executable,baseUrl:expected.url})();
-      else epoch=validateEpochEvidence({pid:record.processId,startTimeUtcTicks:record.startTimeUtcTicks,executable:win32.normalize(expected.executable).toLowerCase(),url:expected.url},await probeWindowsEpoch({pid:record.processId,port}));
+      if(id==='Strata')epoch=await createStrataEpochVerifier({root,expectedExecutable:expected.executable,baseUrl:expected.url,probe:observeEpoch})();
+      else if(id==='ComfyUI')epoch=await createEpochVerifier({runtimePath:recordPath,expectedExecutable:expected.executable,baseUrl:expected.url,probe:observeEpoch})();
+      else epoch=validateEpochEvidence({pid:record.processId,startTimeUtcTicks:record.startTimeUtcTicks,executable:win32.normalize(expected.executable).toLowerCase(),url:expected.url},await observeEpoch({pid:record.processId,port}));
       if(id==='Controller'){
         const health=await getJson(expected.url+'/health');if(epoch.listenerPid!==epoch.pid||health.service!=='local-image-controller'||health.ready!==true||health.pid!==epoch.pid||record.controllerId!==health.controllerId)throw Error('Controller identity differs');
       }else if(id==='ComfyUI'){const stats=await getJson(expected.url+'/system_stats');if(!stats.system||!Array.isArray(stats.devices))throw Error('Comfy readiness unavailable');}
